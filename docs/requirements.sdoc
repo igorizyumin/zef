@@ -1,0 +1,120 @@
+[DOCUMENT]
+TITLE: ZEF WHY — user problems and needs
+UID: ZEF-WHY-DOC
+VERSION: 1.0.0
+DATE: 2026-10-10
+PREFIX: ZEF-WHY
+ROOT: True
+OPTIONS:
+  MARKUP: Text
+
+[TEXT]
+STATEMENT: >>>
+WHY items describe the problems and user needs that motivate ZEF. They define
+intent only: no solution, system boundary, API, or implementation is assumed.
+Each WHAT item refines one or more WHY items.
+<<<
+
+[[SECTION]]
+TITLE: Predictable embedded behavior
+
+[REQUIREMENT]
+UID: ZEF-WHY-001
+TITLE: Reliable event-driven coordination
+STATEMENT: Developers of small embedded products need independent pieces of application behavior to coordinate predictably on limited processors.
+COMMENT: User need: coordinate independent behavior while keeping the execution model understandable.
+
+[REQUIREMENT]
+UID: ZEF-WHY-002
+TITLE: Predictable resource use
+STATEMENT: Embedded application developers need framework memory requirements to be predictable at build time on resource-constrained devices.
+COMMENT: User need: calculate the framework storage required before deployment.
+
+[REQUIREMENT]
+UID: ZEF-WHY-003
+TITLE: Controlled design process
+STATEMENT: >>>
+Project maintainers need a foundation whose design follows a defined, formal process that ensures clear requirements and traceability to specifications and tests.
+<<<
+COMMENT: >>>
+User need: adopt and distribute the result with clear ownership and an auditable design origin.
+<<<
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Application modeling
+
+[REQUIREMENT]
+UID: ZEF-WHY-010
+TITLE: Understandable domain vocabulary
+STATEMENT: Application developers need a small, consistent vocabulary for describing independent application behavior across documentation, interfaces, and tests.
+
+[REQUIREMENT]
+UID: ZEF-WHY-011
+TITLE: Safe message sharing
+STATEMENT: Application developers need to pass data among independent consumers and know exactly when that data can be changed or reclaimed.
+
+[REQUIREMENT]
+UID: ZEF-WHY-012
+TITLE: Composable hierarchical behavior
+STATEMENT: Application developers need to model nested modes of behavior with deterministic handling, entry, exit, and transition behavior.
+
+[REQUIREMENT]
+UID: ZEF-WHY-013
+TITLE: Bounded component lifecycle
+STATEMENT: Application developers need independent pieces of behavior with explicit ownership for the lifetime of the application.
+
+[REQUIREMENT]
+UID: ZEF-WHY-014
+TITLE: Deferred local work
+STATEMENT: Application developers need to retain incoming work until a component reaches a state where it can process it, without losing or duplicating that work.
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Scheduling and time
+
+[REQUIREMENT]
+UID: ZEF-WHY-020
+TITLE: Deterministic scheduling
+STATEMENT: Application developers need predictable ordering and bounded units of application work that can be exercised on a host.
+
+[REQUIREMENT]
+UID: ZEF-WHY-021
+TITLE: Topic fanout
+STATEMENT: Application developers need one occurrence of application information to reach every interested consumer without multiplying storage.
+
+[REQUIREMENT]
+UID: ZEF-WHY-022
+TITLE: Time-based delivery
+STATEMENT: Application developers need delayed and repeating behavior while preserving responsiveness to other application work.
+
+[REQUIREMENT]
+UID: ZEF-WHY-023
+TITLE: Portable concurrency boundary
+STATEMENT: Platform developers need a well-defined boundary between normal application execution and asynchronous hardware activity.
+
+[REQUIREMENT]
+UID: ZEF-WHY-024
+TITLE: Future preemption without semantic drift
+STATEMENT: Product developers need to introduce stronger responsiveness or execution overlap later without changing behavior already understood by applications.
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Adoption and verification
+
+[REQUIREMENT]
+UID: ZEF-WHY-030
+TITLE: Verifiable adoption
+STATEMENT: Maintainers need public behavior, configuration limits, and verification evidence to remain connected as the framework evolves.
+
+[REQUIREMENT]
+UID: ZEF-WHY-031
+TITLE: Licensing
+STATEMENT: >>>
+The framework needs to be permissively licensed to allow both commercial and open-source use.
+<<<
+
+[[/SECTION]]

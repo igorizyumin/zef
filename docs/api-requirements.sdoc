@@ -1,0 +1,971 @@
+[DOCUMENT]
+TITLE: ZEF INTERFACE — public system surface
+UID: ZEF-INTERFACE-DOC
+VERSION: 1.0.0
+DATE: 2026-10-10
+PREFIX: ZEF-IF
+ROOT: False
+OPTIONS:
+  ENABLE_MID: False
+  MARKUP: RST
+
+[TEXT]
+STATEMENT: >>>
+INTERFACE items describe the surface through which a caller uses the system:
+types, operations, inputs, conditions, limits, results, and assumptions. They
+may repeat caller-visible preconditions and exposure rules where needed for a
+complete surface; WHAT items contain the formal behavioral contract. The
+detailed public C surface is included below in rich-text blocks and is maintained
+in this document as the authoritative interface baseline.
+<<<
+
+[[SECTION]]
+TITLE: Common surface and configuration
+
+[REQUIREMENT]
+UID: ZEF-IF-001
+TITLE: Public runtime structures and reserved members
+STATEMENT: >>>
+The public headers provide complete C structure definitions for ``ZMessagePool``,
+``ZMessagePoolSet``, ``ZMsgHandle``, ``ZMsg``, ``ZMailbox``, ``ZMachine``, ``ZReactor``, ``ZKernel``,
+``ZTopicTable``, ``ZClock``, ``ZTimer``, and ``ZPort``. An application can
+therefore allocate these objects automatically, statically, or as members of
+an application-owned structure. Framework-owned members are private by intent:
+the documentation marks them as reserved, and applications shall access them
+through the public operations rather than reading or modifying them directly.
+This is a documentation and usage boundary, not an opaque-handle or
+allocation-indirection requirement.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-001
+- TYPE: Parent
+  VALUE: ZEF-WHAT-007
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-002
+TITLE: Results and panic boundary
+STATEMENT: >>>
+``ZResult`` covers exactly the expected observations ``Z_OK``, ``Z_EMPTY``,
+``Z_NOT_RUNNING``, and ``Z_NOT_FOUND``. Fatal conditions use
+``ZPanicReason`` and
+``ZPanicInfo`` through the application-supplied ``z_panic`` function. The
+function is non-returning and is responsible for safe-state handling,
+diagnostic capture, and stop-or-reset policy. It is an application-wide
+function, not a Port member or per-object callback, so every framework object
+can use the same fatal-error boundary without carrying a callback field.
+
+.. code-block:: c
+
+   typedef uint8_t  ZBool;
+   typedef uint16_t ZTopic;
+   typedef uint16_t ZReactorId;
+   typedef uint8_t  ZPriority;
+   typedef ZEF_TICK_TYPE ZTick;
+
+   typedef enum {
+       Z_OK = 0,
+       Z_EMPTY,
+       Z_NOT_RUNNING,
+       Z_NOT_FOUND,
+   } ZResult;
+
+   typedef enum {
+       Z_PANIC_INVALID_ARGUMENT,
+       Z_PANIC_CONFIGURATION,
+       Z_PANIC_NO_MEMORY,
+       Z_PANIC_MAILBOX_FULL,
+       Z_PANIC_OWNERSHIP,
+       Z_PANIC_LIFECYCLE,
+       Z_PANIC_STATE,
+       Z_PANIC_OVERFLOW,
+       Z_PANIC_PAYLOAD_SIZE,
+       Z_PANIC_INTERNAL
+   } ZPanicReason;
+
+   typedef struct {
+       ZPanicReason reason;
+       void const *object;
+       uintptr_t detail;
+       char const *file; /* optional in release builds */
+       uint32_t line;    /* optional in release builds */
+   } ZPanicInfo;
+
+   typedef void (*ZPanicHandler)(ZPanicInfo const *info);
+   _Noreturn void z_panic(ZPanicInfo const *info);
+
+The exact enum width is a configuration decision, but numeric values remain
+stable within one build. Mailbox overflow, pool exhaustion, invalid arguments,
+invalid lifecycle transitions, ownership violations, state violations, and
+counter overflow are panic conditions rather than ordinary results. Valid
+pointer-producing operations return non-null pointers; an unavailable pointer
+is a panic condition.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-006
+- TYPE: Parent
+  VALUE: ZEF-WHAT-013
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-003
+TITLE: Caller-owned storage
+STATEMENT: >>>
+Runtime objects and Mailbox slot arrays are supplied by the caller. Complete
+public runtime structures may be automatic, static, or embedded in an
+application-owned structure. Framework-owned structure members are reserved by
+documentation and are not application storage. The host core has no
+general-purpose allocation path.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-002
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-004
+TITLE: Configuration surface
+STATEMENT: >>>
+Configuration names cover reactor slots, topic count, message-pool count,
+state depth, queue capacities, tick width, and pool or claim counter widths.
+The configuration header publishes the valid range for each setting and
+rejects invalid values with a build-time diagnostic. Each selected width uses
+an exact-width integer type where layout is observable.
+It exposes ``ZEF_POOL_ALIGNMENT``, ``ZEF_TOPIC_BITMAP_WORD_BITS``, and
+``ZEF_MAX_TIMER_SPAN``; pool alignment is at least ``alignof(max_align_t)``
+and ``ZEF_MAX_TIMER_SPAN`` is less than half the representable ``ZTick`` range.
+The selected tick type is exposed as ``ZEF_TICK_TYPE``; its default is
+``uint32_t``.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-003
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Detailed public C surface
+
+[TEXT]
+STATEMENT: >>>
+Common conventions
+------------------
+
+The public headers are C11-compatible, use exact-width integer types where
+width is observable, and expose complete caller-allocated runtime structures
+whose framework-owned members are reserved by documentation. Functions return
+``ZResult`` only when the outcome is an
+expected part of normal control flow. Fatal conditions invoke the user-supplied
+panic handler and do not return. Output parameters are written only on success.
+Pointers to sealed Messages are read-only in all application-facing APIs.
+
+The exact enum width is a configuration decision, but numeric values remain
+stable within one build. ``Z_EMPTY``, ``Z_NOT_RUNNING``, and ``Z_NOT_FOUND``
+describe expected state observations. Mailbox overflow, pool
+exhaustion, invalid arguments, invalid lifecycle transitions, ownership
+violations, state violations, and counter overflow are panic conditions, not
+ordinary ``ZResult`` values.
+
+The application supplies the ``z_panic`` function. It makes the hardware safe,
+preserves useful diagnostic state, and does not return. It shall be safe to
+call from either thread or interrupt context, shall not block or allocate,
+and shall handle fatal conditions raised by the ISR-safe posting and
+publication operations. A debug handler may stop the target or save a memory
+and register dump; a release handler normally requests an MCU reset. The
+framework uses the Port's interrupt-state operation before invoking the handler
+when required and treats a returning handler as a fatal application error.
+
+The normal operating assumption is that a correctly configured and correctly
+written application never reaches the panic handler. Panic handling is the
+fail-stop boundary for violated assumptions, not recoverable application
+control flow. Every pointer-producing operation has a non-null result on a
+valid call; a pointer result that cannot be provided is a panic condition.
+<<<
+
+[TEXT]
+STATEMENT: >>>
+Configuration and storage
+-------------------------
+
+The build supplies limits such as ``Z_MAX_REACTORS``, ``Z_MAX_TOPICS``,
+``Z_MAX_STATE_DEPTH``, ``Z_MAX_MESSAGE_POOLS``, and the selected counter widths.
+The public configuration header validates their ranges with static assertions,
+publishes ``ZEF_POOL_ALIGNMENT`` and ``ZEF_MAX_TIMER_SPAN``.
+
+Runtime objects and Mailbox slot arrays are caller-owned. The public headers
+define complete runtime structures, so applications may use stack, static, or
+embedded storage without size/alignment query APIs. Framework-owned members are
+reserved by documentation and are not application state. The host core does
+not call a general-purpose allocator.
+<<<
+
+[TEXT]
+STATEMENT: >>>
+Mailbox surface
+---------------
+
+The Mailbox owns a caller-provided ring of read-only Message pointers. The ring
+has monotonic head and tail indices and never allocates.
+
+``post`` and ``post_front`` seal and consume a building ``ZMsg``, transferring
+its creator claim to the destination. ``postpone`` retains an already sealed
+Message for the destination Mailbox before enqueueing it for later handling. A
+full Mailbox invokes the panic handler with
+``Z_PANIC_MAILBOX_FULL`` and does not return. A successful ``take`` transfers
+the Mailbox claim to the caller; an empty ``take`` returns ``Z_EMPTY``.
+Removal releases each removed dynamic Message claim and returns the number
+removed.
+<<<
+
+[TEXT]
+STATEMENT: >>>
+Machine and state-node surface
+------------------------------
+
+State nodes are static descriptors. The Machine owns the current node and the
+application context but not descriptor storage.
+
+Dispatch walks parent links until a handler handles the Message or requests a
+transition. Transition processing leaves the source path in reverse order,
+excluding the common ancestor, changes the current node, enters the target
+path in hierarchy order, and follows ``initial`` links. A self-transition
+leaves and re-enters the current node before following its initial links.
+Dispatch performs no allocation. A transition target that is null or outside
+the validated graph invokes the panic handler with ``Z_PANIC_STATE``.
+<<<
+
+[TEXT]
+STATEMENT: >>>
+Reactor and Kernel surface
+--------------------------
+
+The Reactor binds a Machine and Mailbox to a scheduler identity. Registration
+assigns a zero-based endpoint index exactly once.
+
+Registration and initialization failures invoke the panic handler. A Reactor
+identity remains registered for the Kernel lifetime; Phase 1 has no stop or
+remove operation and no stopped or removed Reactor state.
+
+The Kernel owns the runnable bitmap and registry. Its finite host surface is:
+
+``z_kernel_run_one`` dispatches at most one Message, selects the highest-priority
+runnable Reactor, breaks equal-priority ties by ascending zero-based Reactor
+identity, updates runnable state after the Mailbox changes, and returns
+``Z_NO_WORK`` when the runnable bitmap is zero. ``run_forever`` calls the Port
+idle operation whenever ``run_one`` reports no work.
+<<<
+
+[TEXT]
+STATEMENT: >>>
+Topic publication surface
+-------------------------
+
+Topic tables contain one subscriber bitmap per topic and use a critical section
+for subscription changes and publication snapshots.
+
+Publication seals and consumes the building ``ZMsg`` before taking the
+subscriber snapshot. Recipients are processed in descending priority order;
+equal-priority recipients are processed in ascending zero-based Reactor
+identity order. If any recipient is full, publication invokes the panic
+handler with ``Z_PANIC_MAILBOX_FULL`` and does not return. Partial-delivery
+recovery is not provided after the fatal condition; recipients processed before
+the panic retain their claims. On normal return, each processed recipient
+obtains one claim, the creator claim is consumed (and released when there are
+no recipients), and the operation returns the delivery count.
+
+Unsubscribing a topic that is not currently subscribed returns ``Z_NOT_FOUND``.
+<<<
+
+[TEXT]
+STATEMENT: >>>
+Clock and Timer surface
+-----------------------
+
+Timers are caller-owned nodes in a delta list. ``z_timer_init`` transfers one
+dynamic Message claim to the Timer; the caller must not release that claim
+after initialization. The Timer retains ownership while armed and releases it
+when disarmed with no pending delivery. Each pending dynamic delivery has its
+own claim. Static immutable Messages require no claim bookkeeping.
+``z_timer_init_topic`` creates a timer-owned immutable zero-payload Message for
+the supplied topic without using a Message pool. Timer expiration posts a
+Message and never invokes an application handler from tick context.
+
+An armed Timer cannot be armed again; attempting to do so invokes the panic
+handler with ``Z_PANIC_STATE``. A period of zero means one-shot delivery. A
+periodic Timer expiring at tick T is reinserted for T plus its period using
+unsigned modular tick arithmetic. A zero delay expires on the next tick, and a
+Timer armed during processing of tick T is not eligible until a later tick.
+Timers due on the same tick are posted in arm order; delays and periods are
+limited to the configured less-than-half-range maximum.
+Stopping unlinks it immediately and returns ``Z_NOT_RUNNING`` when it was
+already stopped. Cancellation stops the Timer and removes only that Timer's
+pending Messages; it does not remove unrelated deliveries of the same Message
+value.
+<<<
+
+[TEXT]
+STATEMENT: >>>
+Message ownership and typed payload surface
+--------------------------------------------
+
+Message construction uses a mutable ``ZMsg`` handle. It is valid only between
+``z_message_begin`` and the first consuming post or publication. The consuming
+operation seals the Message before enqueueing it; the resulting ``ZMsgHandle``
+is immutable and may be shared.
+
+``z_message_begin`` creates one creator claim and returns a non-null pointer to
+the complete mutable payload region. The payload size includes the complete
+application payload; the allocator uses the envelope-plus-payload size to
+select the smallest available block size that can contain the complete
+Message, with caller-supplied order breaking equal-size ties. ``z_mailbox_post``,
+``z_mailbox_post_front``, and ``z_topic_publish`` seal the ``ZMsg`` before
+enqueueing or taking the subscriber snapshot, then consume the creator claim.
+A normal delivery transfers the caller's claim; ``postpone`` retains an
+additional claim for the destination Mailbox on an already sealed handle while
+the caller keeps its existing claim. Pool exhaustion uses
+``Z_PANIC_NO_MEMORY`` and does not return an exhausted result. Invalid
+construction lifecycle violations also panic. Retain and release are no-ops
+for static Messages, so generic receiver cleanup does not need to branch on
+Message kind. Dynamic release reclaims the block only after the last claim.
+
+Static Messages may be declared as immutable objects and are accepted by
+read-only delivery APIs without pool bookkeeping.
+
+``ZMsgHandle`` is a complete public structure whose framework-owned members are
+reserved by documentation. Applications define the payload type rather than
+reading or modifying those reserved members. In Phase 1, ``ZTopic`` is also the
+payload type identifier, so each topic has one documented payload schema. The
+payload size is stored in the Message envelope.
+
+Posting seals the Message. A receiving handler reads the payload through the
+const accessor:
+
+Checked access invokes the panic handler with ``Z_PANIC_PAYLOAD_SIZE`` when the
+exact size does not match. The application selects the expected type after
+dispatching on the Message topic; a topic does not carry multiple incompatible
+payload schemas.
+
+When a payload contains a pointer to an external buffer, the buffer owner keeps
+it alive and immutable for as long as any Message claim can be observed. Data
+larger than one fixed payload uses a separate Message type or an
+application-owned external buffer.
+<<<
+
+[TEXT]
+STATEMENT: >>>
+Port contract
+-------------
+
+The host Port implements fake interrupt masking. The Cortex-M0 Port maps the
+same contract to ``PRIMASK`` and ``PendSV``.
+
+Critical leave restores the saved state. The Port is an internal framework
+adapter; it does not own the application panic boundary and does not classify
+application-callable API functions. Interrupt context legality for fixed-pool
+Message construction, Mailbox, publication, scheduler, and timer operations is
+recorded by ``ZEF-IF-041``. All fatal paths call the application-provided
+``z_panic`` function.
+<<<
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Messages, pools, and Mailboxes
+
+[REQUIREMENT]
+UID: ZEF-IF-010
+TITLE: Message construction and access
+STATEMENT: >>>
+The construction handle is mutable only before a consuming operation; the
+sealed handle is const to callers. The construction and read surface is:
+
+.. code-block:: c
+
+   void *z_message_begin(ZMessagePoolSet *pool_set,
+                         ZTopic topic,
+                         size_t payload_size,
+                         ZMsg *message);
+   void *z_message_payload_mut(ZMsg *message);
+   void *z_message_payload_mut_checked(ZMsg *message,
+                                       size_t expected_size);
+
+   ZTopic z_message_topic(ZMsgHandle const *message);
+   size_t z_message_payload_size(ZMsgHandle const *message);
+   void const *z_message_payload(ZMsgHandle const *message);
+   void const *z_message_payload_checked(ZMsgHandle const *message,
+                                         size_t expected_size);
+
+   #define Z_MSG_BEGIN(pool_set_, topic_, Type_, msg_) \
+       ((Type_ *)z_message_begin((pool_set_), (topic_), sizeof(Type_), (msg_)))
+
+   #define Z_MSG_PAYLOAD(message_, Type_) \
+       ((Type_ const *)z_message_payload_checked((message_), sizeof(Type_)))
+
+   #define Z_MSG_PAYLOAD_MUT(msg_, Type_) \
+       ((Type_ *)z_message_payload_mut_checked((msg_), sizeof(Type_)))
+
+   typedef struct {
+       uintptr_t address;
+       uint8_t *buffer;
+       size_t length;
+   } ZIoRequest;
+
+   ZMsg msg;
+   ZIoRequest *request =
+       Z_MSG_BEGIN(&message_pools, Z_IO_REQUEST, ZIoRequest, &msg);
+   request->address = address;
+   request->buffer = buffer;
+   request->length = length;
+   z_mailbox_post(&mailbox, &msg);
+
+   void handle_io_request(ZMsgHandle const *message)
+   {
+       ZIoRequest const *request = Z_MSG_PAYLOAD(message, ZIoRequest);
+   }
+
+The typed construction and access macros validate the fixed payload size. A
+valid call returns a non-null pointer; size mismatch and invalid lifecycle
+conditions use the panic boundary. Read access to a dynamic sealed Message
+requires the caller to hold a live claim; an absent or stale dynamic claim is
+an ownership violation. Read access to a static Message requires only that the
+caller-owned Message and payload remain alive and immutable.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-010
+- TYPE: Parent
+  VALUE: ZEF-WHAT-013
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-011
+TITLE: Message ownership operations
+STATEMENT: >>>
+Ownership operations apply to sealed ``ZMsgHandle`` values. Normal post
+transfers the caller claim; ``postpone`` adds a claim; dequeue transfers the
+Mailbox claim to the receiver; final release returns the block to its
+originating pool.
+
+.. code-block:: c
+
+   void z_message_retain(ZMsgHandle const *message);
+   void z_message_release(ZMsgHandle const *message);
+
+For a dynamic Message, retain adds one claim, release removes one claim, and
+the final release returns the block to its originating pool. Dynamic claim
+overflow, release without a dynamic claim, and post-seal mutation are panic
+conditions. For a static immutable Message, retain and release are no-ops;
+they do not inspect or change a claim count and never return the Message to a
+pool. Callers may therefore use the same cleanup path for either Message kind
+without first identifying which kind they received.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-011
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-012
+TITLE: Message pool inputs and limits
+STATEMENT: >>>
+Pool initialization accepts caller storage, storage size, block size, and block
+count. Storage shall be non-null, aligned to ``ZEF_POOL_ALIGNMENT``, and at
+least ``block_size * block_count`` bytes. ``block_size`` shall be nonzero,
+large enough for the private envelope plus the largest payload class assigned
+to the pool, and a multiple of ``ZEF_POOL_ALIGNMENT``. ``ZEF_POOL_ALIGNMENT``
+shall be at least the alignment required by ``max_align_t``.
+
+The pool set surface is:
+
+.. code-block:: c
+
+   typedef struct {
+       ZMessagePool *pools;
+       uint16_t count;
+   } ZMessagePoolSet;
+
+   void z_message_pool_set_init(ZMessagePoolSet *pool_set,
+                                ZMessagePool *pools,
+                                uint16_t count);
+
+Each element of ``pools`` shall have been initialized by
+``z_message_pool_init``. The set retains the caller-owned array for the set's
+lifetime; the array shall not be reordered or modified while Messages may be
+allocated from the set.
+
+A requested allocation includes the private envelope and payload. The message
+service selects the smallest available block size that can contain that total;
+equal block sizes are selected in caller-supplied array order. If no suitable
+pool has a free block, the panic boundary is used.
+
+.. code-block:: c
+
+   void z_message_pool_init(ZMessagePool *pool,
+                            void *storage,
+                            size_t storage_size,
+                            size_t block_size,
+                            uint16_t block_count);
+
+Exhaustion, invalid alignment, insufficient storage, invalid sizing, an empty
+pool set, and an unavailable pointer use the panic boundary rather than
+returning a null pointer or ordinary exhaustion result.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-010
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-013
+TITLE: Mailbox operations
+STATEMENT: >>>
+Inputs include a non-null caller-owned pointer ring and nonzero capacity. The
+ring shall not alias the Mailbox object or another live Mailbox ring. A Mailbox
+may be assigned to a registered Reactor as its scheduler-visible inbox or may
+remain unassigned as an application-owned local/deferred queue. The Mailbox
+surface is:
+
+.. code-block:: c
+
+   void z_mailbox_init(ZMailbox *mailbox,
+                       ZMsgHandle const **slots,
+                       uint16_t capacity);
+   void z_mailbox_post(ZMailbox *mailbox, ZMsg *message);
+   void z_mailbox_postpone(ZMailbox *mailbox,
+                           ZMsgHandle const *message);
+   void z_mailbox_post_front(ZMailbox *mailbox, ZMsg *message);
+   ZResult z_mailbox_take(ZMailbox *mailbox,
+                          ZMsgHandle const **message_out);
+
+   uint16_t z_mailbox_count(ZMailbox const *mailbox);
+   uint16_t z_mailbox_capacity(ZMailbox const *mailbox);
+   uint16_t z_mailbox_free(ZMailbox const *mailbox);
+   uint16_t z_mailbox_min_free(ZMailbox const *mailbox);
+
+   typedef ZBool (*ZMsgPredicate)(ZMsgHandle const *message, void *context);
+   uint16_t z_mailbox_remove_if(ZMailbox *mailbox,
+                                ZMsgPredicate predicate,
+                                void *context);
+
+Empty ``take`` returns ``Z_EMPTY`` without writing its output. Full enqueue
+uses the panic boundary. ``post_front`` places the new Message immediately
+before the current next Message; repeated front posts are therefore taken in
+last-in-first-out order. ``remove_if`` evaluates its predicate once per queued
+entry in delivery order, preserves the order of retained entries, returns the
+number removed, and releases each removed dynamic Message claim. A null
+predicate is an invalid argument and invokes the panic handler. The minimum
+free-space observation is initialized to capacity and records the lowest free
+space reached since Mailbox initialization. Operations on an unassigned local
+Mailbox never update a Kernel runnable identity and never dispatch Messages
+automatically. An application may defer a sealed Message received by a handler
+with ``z_mailbox_postpone`` and later call ``z_mailbox_take`` when the
+owning Machine reaches the appropriate state. For a dynamic Message, the
+application then owns the returned claim and releases it after processing. For
+a static Message, the application receives a reference with no claim; calling
+``z_message_release`` after processing is still valid and is a no-op. The
+``postpone`` name means that the sealed Message is retained for later handling;
+the sealed Message storage is shared between the existing caller claim and the
+new Mailbox claim for dynamic Messages, while static Messages simply share the
+same reference. The payload is not copied.
+
+.. code-block:: c
+
+   ZMailbox deferred;
+   ZMsgHandle const *deferred_slots[4];
+   z_mailbox_init(&deferred, deferred_slots, 4);
+
+   /* In a handler that must defer the current sealed Message. */
+   z_mailbox_postpone(&deferred, message);
+
+   /* In the application-selected state that is ready to process it. */
+   ZMsgHandle const *deferred_message;
+   if (z_mailbox_take(&deferred, &deferred_message) == Z_OK) {
+       z_machine_dispatch(machine, deferred_message);
+       z_message_release(deferred_message);
+   }
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-012
+- TYPE: Parent
+  VALUE: ZEF-WHAT-031
+- TYPE: Parent
+  VALUE: ZEF-WHAT-033
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Machines and Reactors
+
+[REQUIREMENT]
+UID: ZEF-IF-020
+TITLE: State node and Machine surface
+STATEMENT: >>>
+A State node descriptor carries parent and initial-child links, a Message
+handler, and enter and leave hooks. The Machine owns the current node and
+application context, but not descriptor storage.
+
+.. code-block:: c
+
+   typedef struct ZStateNode ZStateNode;
+
+   struct ZStateNode {
+       ZStateNode const *parent;
+       ZStateNode const *initial;
+       ZStateHandler handle;
+       ZStateHook enter;
+       ZStateHook leave;
+   };
+
+   void z_machine_init(ZMachine *machine,
+                       ZStateNode const *root,
+                       void *context);
+   void z_machine_start(ZMachine *machine);
+   void z_machine_dispatch(ZMachine *machine,
+                           ZMsgHandle const *message);
+   ZStateNode const *z_machine_state(ZMachine const *machine);
+
+Initialization validates the root and State graph in assertion-enabled builds;
+an invalid graph invokes the panic handler with ``Z_PANIC_STATE`` before
+initialization completes. In assertion-disabled builds the application is
+responsible for supplying a valid graph. Handlers receive a const Message
+handle; hooks receive application context. Dispatch performs no allocation.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-020
+- TYPE: Parent
+  VALUE: ZEF-WHAT-021
+- TYPE: Parent
+  VALUE: ZEF-WHAT-022
+- TYPE: Parent
+  VALUE: ZEF-WHAT-023
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-021
+TITLE: Machine action vocabulary
+STATEMENT: >>>
+The action vocabulary and callback types are:
+
+.. code-block:: c
+
+   typedef enum {
+       Z_ACTION_UNHANDLED,
+       Z_ACTION_HANDLED,
+       Z_ACTION_TRANSITION
+   } ZActionKind;
+
+   typedef struct {
+       ZActionKind kind;
+       ZStateNode const *target;
+   } ZAction;
+
+   typedef ZAction (*ZStateHandler)(void *context,
+                                    ZMsgHandle const *message);
+   typedef void (*ZStateHook)(void *context);
+
+Handlers return an action; hooks return no value. ``ZAction.target`` shall be
+null for ``Z_ACTION_UNHANDLED`` and ``Z_ACTION_HANDLED`` and non-null for
+``Z_ACTION_TRANSITION``. Any other combination is a state violation.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-020
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-022
+TITLE: Reactor and lifecycle surface
+STATEMENT: >>>
+Reactor configuration carries one primary Machine pointer, a Mailbox pointer,
+and an application context. Registration returns a zero-based ``ZReactorId``.
+The application context may contain auxiliary Machines, including submachines,
+created and managed by application code. The framework does not create,
+register, schedule, or remove those auxiliary Machines; application code may
+dispatch the same read-only Message to them synchronously as part of its
+Reactor handling.
+
+Because ``ZReactor`` is a complete public structure, an application may embed
+it as the first member of a larger application-defined structure and pass the
+address of that embedded member to framework APIs. The framework manages only
+the embedded ``ZReactor`` portion; application code owns the extension state and
+any auxiliary Machines or submachines.
+
+.. code-block:: c
+
+   typedef struct {
+       ZMachine *machine;
+       ZMailbox *mailbox;
+       void *context;
+   } ZReactorConfig;
+
+   void z_reactor_init(ZReactor *reactor,
+                       ZReactorConfig const *config);
+   ZReactorId z_reactor_register(ZKernel *kernel,
+                                 ZReactor *reactor,
+                                 ZPriority priority);
+   void z_reactor_start(ZKernel *kernel, ZReactorId id);
+
+Initialization and registration failures use the panic boundary. Registration
+is valid only for a constructed Reactor and assigns its identity exactly once;
+the identity remains registered for the Kernel lifetime. Start is valid only
+for a registered Reactor and may be called once. There is no stopped or removed
+Reactor state in Phase 1. Posting to an unregistered identity is an invalid
+argument and invokes the panic handler.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-030
+- TYPE: Parent
+  VALUE: ZEF-WHAT-032
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Kernel, topics, and Clock
+
+[REQUIREMENT]
+UID: ZEF-IF-030
+TITLE: Kernel surface
+STATEMENT: >>>
+The Port is supplied during Kernel initialization. The finite scheduler surface
+is:
+
+.. code-block:: c
+
+   typedef enum {
+       Z_NO_WORK,
+       Z_WORK_DONE
+   } ZRunResult;
+
+   void z_kernel_init(ZKernel *kernel, ZPort const *port);
+   ZRunResult z_kernel_run_one(ZKernel *kernel);
+   void z_kernel_run_forever(ZKernel *kernel);
+   ZResult z_kernel_current_priority(ZKernel const *kernel,
+                                     ZPriority *priority_out);
+
+``z_kernel_run_one`` dispatches at most one Message. ``run_forever`` calls the
+Port idle operation whenever ``run_one`` reports no work. During a dispatch,
+``z_kernel_current_priority`` returns ``Z_OK`` and writes the active priority;
+when no dispatch is active it returns ``Z_NOT_RUNNING`` without writing the
+output.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-040
+- TYPE: Parent
+  VALUE: ZEF-WHAT-041
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-031
+TITLE: Topic surface
+STATEMENT: >>>
+A topic identifies a documented payload schema. A TopicTable is bound to one
+Kernel at initialization so it can validate Reactor identities and read their
+priorities for publication ordering. Publication accepts a building ``ZMsg``
+and returns a delivery count on normal completion.
+
+.. code-block:: c
+
+   void z_topic_table_init(ZTopicTable *table,
+                           ZKernel *kernel);
+   void z_topic_subscribe(ZTopicTable *table,
+                          ZTopic topic,
+                          ZReactorId reactor_id);
+   ZResult z_topic_unsubscribe(ZTopicTable *table,
+                               ZTopic topic,
+                               ZReactorId reactor_id);
+   uint16_t z_topic_publish(ZKernel *kernel,
+                            ZTopicTable *table,
+                            ZMsg *message);
+
+Subscription changes and publication snapshots use the Port critical-section
+contract. The Kernel argument to publication shall be the Kernel bound to the
+TopicTable. A publication observes exactly the subscription snapshot taken in
+that critical section; later changes do not affect it. Repeating an existing
+subscription is idempotent. Subscribing an identity that is not registered in
+the bound Kernel is invalid. An absent unsubscribe returns ``Z_NOT_FOUND``;
+out-of-range topics and Reactor identities are invalid arguments and invoke
+the panic handler.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-050
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-032
+TITLE: Clock and Timer surface
+STATEMENT: >>>
+Timer inputs include a destination Reactor identity, an immutable timer Message,
+delay, and period. The Timer records which deliveries it posted so cancellation
+cannot remove unrelated deliveries that use the same Message value. The Clock
+and Timer surface is:
+
+.. code-block:: c
+
+   void z_clock_init(ZClock *clock, ZKernel *kernel);
+   void z_timer_init(ZTimer *timer,
+                     ZClock *clock,
+                     ZReactorId destination,
+                     ZMsgHandle const *message);
+   void z_timer_init_topic(ZTimer *timer,
+                           ZClock *clock,
+                           ZReactorId destination,
+                           ZTopic topic);
+   void z_timer_arm(ZTimer *timer, ZTick delay, ZTick period);
+   ZResult z_timer_stop(ZTimer *timer);
+   ZResult z_timer_cancel(ZTimer *timer);
+   void z_clock_tick(ZClock *clock);
+
+``z_timer_init`` transfers one caller-owned dynamic Message claim to the Timer;
+the caller shall not release that claim after initialization. The Timer keeps
+that ownership while armed and releases it when the Timer is disarmed and has
+no pending delivery. A static immutable Message transfers no claim. The Timer
+retains an additional claim for each pending dynamic delivery. The
+``z_timer_init_topic`` form creates a timer-owned immutable zero-payload
+Message for the supplied topic and requires no Message pool.
+
+Stopping an already disarmed Timer returns ``Z_NOT_RUNNING``. Timer expiration
+posts a Message and does not invoke application handlers from tick context.
+Timers expiring on the same tick are posted in arm order. Tick arithmetic is
+unsigned and modular; zero delay expires on the next tick, and delays and
+periods are limited to the configured less-than-half-range maximum.
+``z_timer_cancel`` stops the Timer and removes its pending timer Messages; it
+returns ``Z_NOT_RUNNING`` when the Timer is neither armed nor pending.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-060
+- TYPE: Parent
+  VALUE: ZEF-WHAT-061
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Port and verification surface
+
+[REQUIREMENT]
+UID: ZEF-IF-040
+TITLE: Internal port adapter
+STATEMENT: >>>
+The host and target Ports implement an internal adapter used by the framework
+for interrupt masking, deferred rescheduling, and idle behavior. These
+callbacks are framework-owned port operations, not
+application-callable API functions.
+
+.. code-block:: c
+
+   typedef uint32_t ZCriticalState;
+
+   struct ZPort {
+       ZCriticalState (*critical_enter)(void);
+       void (*critical_leave)(ZCriticalState state);
+       void (*request_reschedule)(void);
+       void (*idle)(void);
+   };
+
+Critical leave restores the saved state. Fatal conditions call the
+application-provided ``z_panic`` function; the panic function is not a Port
+callback. Target-specific context-switching operations are outside this
+surface until the preemptive port is included in a phase baseline.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-070
+- TYPE: Parent
+  VALUE: ZEF-WHAT-071
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-041
+TITLE: Public API interrupt-context contract
+STATEMENT: >>>
+The public API shall classify every application-callable function and macro as
+ISR-safe or thread-only. Phase 1 shall support these operations from interrupt
+or handler context:
+
+* ``z_message_begin``;
+* ``z_message_payload_mut`` and ``z_message_payload_mut_checked``;
+* ``z_mailbox_post``;
+* ``z_mailbox_post_front``;
+* ``z_mailbox_postpone``; and
+* ``z_topic_publish``.
+
+Those operations shall be bounded, shall not allocate from a general-purpose
+allocator or block, and shall use the documented critical-section and ownership
+rules. The ``Z_MSG_BEGIN`` and ``Z_MSG_PAYLOAD_MUT`` macros inherit the
+ISR-safe classification of their fixed-pool construction functions. Message
+read access, retain/release, pool initialization, Mailbox removal and take,
+subscription changes, Machine, Reactor, Kernel, Clock, and Timer operations
+are thread-only in Phase 1. A later phase may add a separately named ISR
+variant, but no unclassified application API is permitted. Internal Port
+callbacks are outside this application API classification.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-070
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-050
+TITLE: Consumer verification surface
+STATEMENT: >>>
+Public-header verification uses consumer translation units that include public
+headers and link the built library. Every type, function, macro, and constant
+has a compile test. Every normative runtime behavior has a behavior test;
+documentation-only, provenance, and license items have a review record with
+explicit pass/fail criteria. Each evidence item has a traceability link to
+its requirement UID.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-080
+- TYPE: Parent
+  VALUE: ZEF-WHAT-004
+- TYPE: Parent
+  VALUE: ZEF-WHAT-081
+- TYPE: Parent
+  VALUE: ZEF-WHAT-082
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: docs/traceability.md
+
+[REQUIREMENT]
+UID: ZEF-IF-051
+TITLE: Release licensing notices
+STATEMENT: >>>
+The release uses the Apache 2.0 license and appropriate notices are present.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-005
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: docs/traceability.md
+
+[[/SECTION]]

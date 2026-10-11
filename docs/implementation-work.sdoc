@@ -1,0 +1,187 @@
+[DOCUMENT]
+TITLE: ZEF IMPLEMENTATION — selected solution and code work
+UID: ZEF-IMPLEMENTATION-DOC
+VERSION: 1.0.0
+DATE: 2026-10-10
+PREFIX: ZEF-IMP
+ROOT: False
+OPTIONS:
+  ENABLE_MID: False
+  MARKUP: Text
+
+[TEXT]
+STATEMENT: >>>
+IMPLEMENTATION items choose the concrete solution. The remaining work is to
+write and verify the code at the linked paths. Each item has an INTERFACE parent
+and a planned code link; a missing code file means planned, not unlinked.
+<<<
+
+[[SECTION]]
+TITLE: Build, configuration, and common failure handling
+
+[REQUIREMENT]
+UID: ZEF-IMP-001
+TITLE: Configuration header and assertions
+STATEMENT: Add the compile-time configuration header, exact-width public types, range checks, layout checks, and configuration-test fixtures.
+COMMENT: Code link: framework/include/zef_config.h; tests/configuration/.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-004
+
+[REQUIREMENT]
+UID: ZEF-IMP-002
+TITLE: Opaque public object headers
+STATEMENT: Use forward-declared opaque runtime types and caller-owned storage handles in the public headers.
+COMMENT: Code link: framework/include/zef_types.h; framework/include/zef_api.h.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-001
+- TYPE: Parent
+  VALUE: ZEF-IF-003
+
+[REQUIREMENT]
+UID: ZEF-IMP-003
+TITLE: Panic and result implementation
+STATEMENT: Implement the result enums, panic reasons, diagnostic payload, non-returning panic adapter, and host capture hook.
+COMMENT: Code link: framework/core/zef_panic.c; framework/include/zef_panic.h; tests/panic/.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-002
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Message, Mailbox, and Machine implementation
+
+[REQUIREMENT]
+UID: ZEF-IMP-010
+TITLE: Fixed message pools and envelope
+STATEMENT: Use fixed aligned block pools with a bounded free-list, an opaque envelope, a building/sealed state bit, a topic, exact payload length, and an internal claim counter.
+COMMENT: Code link: framework/core/zef_pool.c; framework/core/zef_message.c; framework/include/zef_message.h.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-010
+- TYPE: Parent
+  VALUE: ZEF-IF-012
+
+[REQUIREMENT]
+UID: ZEF-IMP-011
+TITLE: Claim transfer and reclamation
+STATEMENT: Implement normal post as claim transfer, shared post as retain-before-enqueue, dequeue transfer, publication claim accounting, checked release, and immediate final-release return to the originating pool.
+COMMENT: Code link: framework/core/zef_message.c; tests/message_ownership/.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-011
+
+[REQUIREMENT]
+UID: ZEF-IMP-012
+TITLE: Ring Mailbox
+STATEMENT: Use a monotonic head/tail ring over caller-provided const Message pointers, with conditional wrap for arbitrary capacities, front insertion, statistics, and stable selective removal.
+COMMENT: Code link: framework/core/zef_mailbox.c; framework/include/zef_mailbox.h.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-013
+
+[REQUIREMENT]
+UID: ZEF-IMP-020
+TITLE: Descriptor-based Machine
+STATEMENT: Represent each State node with immutable parent, initial, handler, enter, and leave fields; keep only the current node and startup state in the Machine; use bounded local traversal storage for transitions.
+COMMENT: Code link: framework/core/zef_machine.c; framework/include/zef_machine.h.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-020
+- TYPE: Parent
+  VALUE: ZEF-IF-021
+
+[REQUIREMENT]
+UID: ZEF-IMP-030
+TITLE: Reactor registry and cleanup
+STATEMENT: Implement a zero-based registry with explicit lifecycle state, mailbox cleanup, runnable-bit cleanup, timer detach, subscription removal, and detectable repeated removal.
+COMMENT: Code link: framework/core/zef_reactor.c; framework/include/zef_reactor.h.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-022
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Kernel, topics, and time
+
+[REQUIREMENT]
+UID: ZEF-IMP-040
+TITLE: Cooperative Kernel bitmap
+STATEMENT: Use one runnable bitmap indexed by zero-based Reactor identity, highest-set-bit selection, one-message run_one dispatch, and an idle callback in run_forever.
+COMMENT: Code link: framework/core/zef_kernel.c; framework/include/zef_kernel.h.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-030
+
+[REQUIREMENT]
+UID: ZEF-IMP-050
+TITLE: Bitmap topic table
+STATEMENT: Use one subscriber bitmap per topic, snapshot it inside the port critical section, and deliver the shared sealed Message in priority order.
+COMMENT: Code link: framework/core/zef_topics.c; framework/include/zef_topics.h.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-031
+
+[REQUIREMENT]
+UID: ZEF-IMP-060
+TITLE: Delta-list Clock service
+STATEMENT: Use a caller-owned delta list, explicit timer state, immediate unlink on stop, enqueue-only expiry handling, periodic reinsertion, and a documented same-tick rule.
+COMMENT: Code link: framework/core/zef_clock.c; framework/include/zef_clock.h.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-032
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Ports, optional preemption, and verification
+
+[REQUIREMENT]
+UID: ZEF-IMP-070
+TITLE: Host port
+STATEMENT: Implement saved-state fake interrupt masking, nested restoration, reschedule observation, idle observation, and non-returning panic capture for host tests.
+COMMENT: Code link: framework/ports/host/zef_port_host.c; tests/port_host/.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-040
+
+[REQUIREMENT]
+UID: ZEF-IMP-071
+TITLE: Cortex-M0 port
+STATEMENT: Map critical sections to PRIMASK, rescheduling to PendSV request, idle to the target low-power hook, and panic to the target safe-state policy; document kernel-aware interrupts.
+COMMENT: Code link: framework/ports/cortex-m0/zef_port_cortex_m0.c; framework/ports/cortex-m0/zef_pendsv.S.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-040
+
+[REQUIREMENT]
+UID: ZEF-IMP-073
+TITLE: Public API interrupt-context annotations
+STATEMENT: Add an explicit ISR-safe, thread-only, or ISR-variant classification to every application-callable public API function and macro, including stated preconditions, boundedness limits, ownership rules, and fatal-error behavior; add ISR-specific operations where the classification requires them.
+COMMENT: Code link: public headers and API documentation; ISR-context consumer tests.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-041
+
+[REQUIREMENT]
+UID: ZEF-IMP-072
+TITLE: Optional PendSV scheduler
+STATEMENT: Implement per-Reactor process stacks, valid exception frames, callee-saved register save and restore, highest-eligible-runnable selection, and safe removal of a terminated Reactor.
+COMMENT: Code link: framework/ports/cortex-m0/zef_pendsv.S; framework/ports/cortex-m0/zef_context.c.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-040
+
+[REQUIREMENT]
+UID: ZEF-IMP-080
+TITLE: Consumer and behavior test matrix
+STATEMENT: Add public-header consumer tests, unit tests, property tests, integration tests, configuration variants, and sanitizer builds covering each WHAT and INTERFACE item before phase exit.
+COMMENT: Code link: tests/; CMake test targets; source relation markers in implementation and test files.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-050
+
+[[/SECTION]]

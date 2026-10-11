@@ -1,0 +1,8 @@
+# StrictDoc generated output.
+strictdoc-out/
+output/
+__pycache__/
+
+# Local build and coverage output.
+build/
+coverage/

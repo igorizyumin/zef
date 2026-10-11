@@ -1,0 +1,499 @@
+[DOCUMENT]
+TITLE: ZEF WHAT — system behavior contract
+UID: ZEF-WHAT-DOC
+VERSION: 1.0.0
+DATE: 2026-10-10
+PREFIX: ZEF-WHAT
+ROOT: False
+OPTIONS:
+  ENABLE_MID: False
+  MARKUP: Text
+
+[TEXT]
+STATEMENT: >>>
+WHAT items are the formal contract for the ZEF system boundary. Every item is a
+normative shall statement. WHAT defines observable behavior and limits without
+choosing data structures, function names, or algorithms. INTERFACE items describe
+the surface of this contract; IMPLEMENTATION items select its concrete solution.
+<<<
+
+[[SECTION]]
+TITLE: Boundary, configuration, and trust
+
+[REQUIREMENT]
+UID: ZEF-WHAT-001
+TITLE: Embedded framework boundary
+STATEMENT: ZEF shall provide an independent event-driven framework for small microcontrollers, including ARM Cortex-M0 and Cortex-M0+ targets, without depending on a general-purpose operating system.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-001
+
+[REQUIREMENT]
+UID: ZEF-WHAT-002
+TITLE: Predictable build-time storage
+STATEMENT: >>>
+ZEF shall make framework RAM requirements predictable at build time. For a
+configuration and caller-supplied storage, the required framework storage shall
+be calculable from configured limits, public object sizes, and documented
+caller-storage declarations. ZEF shall not use a general-purpose runtime
+allocator. Execution-time bounds are specified only where an individual
+requirement states them.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-002
+
+[REQUIREMENT]
+UID: ZEF-WHAT-003
+TITLE: Configuration limits
+STATEMENT: >>>
+ZEF shall expose configurable limits for registered reactors,
+topics, message pools, state depth, queue capacity, tick width, and ownership
+counters. The public configuration header shall define the valid range for
+each limit and shall reject invalid values at build time, before runtime use.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-002
+
+[REQUIREMENT]
+UID: ZEF-WHAT-004
+TITLE: Requirement traceability
+STATEMENT: >>>
+ZEF shall define public concepts, object responsibilities,
+state-machine behavior, ownership behavior, scheduler behavior, and port
+behavior in traceable documents.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-003
+
+[REQUIREMENT]
+UID: ZEF-WHAT-007
+TITLE: Consistent public vocabulary
+STATEMENT: >>>
+ZEF shall use one documented vocabulary for its public concepts
+across requirements, interfaces, examples, and verification artifacts. The
+vocabulary record shall define the spelling and meaning of each public term,
+and the review shall report any term used outside that record.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-010
+
+[REQUIREMENT]
+UID: ZEF-WHAT-005
+TITLE: Distribution terms
+STATEMENT: >>>
+The ZEF framework shall be licensed under the Apache 2.0 license.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-031
+
+[REQUIREMENT]
+UID: ZEF-WHAT-006
+TITLE: Fatal-condition boundary
+STATEMENT: >>>
+Fatal resource, ownership, configuration, argument, lifecycle, and
+state violations shall invoke the application panic handler, shall not be
+represented as ordinary recoverable results, and shall not return. The
+interface shall assign each fatal condition to a documented panic reason;
+ordinary results shall be limited to documented expected observations.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-002
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Message behavior
+
+[REQUIREMENT]
+UID: ZEF-WHAT-010
+TITLE: Message identity and typed payload
+STATEMENT: >>>
+ZEF shall provide a public Message structure with an application-visible topic
+identity and a payload size, and shall support fixed-size application-defined
+payloads. ZEF shall also provide a caller-owned static Message form whose
+payload is immutable after initialization and whose static kind is observable
+through the public Message operations. Framework-owned allocation and ownership
+fields shall be reserved by documentation and shall be accessed only through
+the public Message operations.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-011
+
+[REQUIREMENT]
+UID: ZEF-WHAT-011
+TITLE: Message lifecycle and ownership
+STATEMENT: >>>
+A dynamic Message shall begin with one creator claim, progress from
+building to sealed to reclaimed, and be reclaimed only after all ownership
+claims are released. A building Message shall be writable only by its creator;
+a sealed Message shall be immutable and shareable. A static Message shall be
+initialized once, remain immutable for its caller-defined lifetime, and shall
+not be associated with a Message pool or ownership claim. The framework shall
+identify static Messages before applying dynamic claim or pool-reclamation
+rules.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-011
+
+[REQUIREMENT]
+UID: ZEF-WHAT-012
+TITLE: Delivery ownership
+STATEMENT: >>>
+A successful normal delivery shall transfer one ownership claim to
+its destination, and a failed delivery shall create no destination claim or
+queued entry. A ``postpone`` delivery shall add one claim, and dequeue shall
+transfer the destination claim to the receiver. Publication shall create one
+claim per successful recipient without copying Message storage; publication to
+zero recipients shall consume the creator claim and return a zero delivery
+count. Static delivery shall enqueue a reference without changing claim
+counts; the same static Message may be delivered repeatedly and to multiple
+destinations. Static delivery shall not copy the payload, and queued static
+references shall remain valid until the caller-defined static Message lifetime
+ends.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-011
+
+[REQUIREMENT]
+UID: ZEF-WHAT-013
+TITLE: Message failure behavior
+STATEMENT: >>>
+Pool exhaustion, full-destination delivery, dynamic claim overflow, release of
+a dynamic Message without a claim, post-seal mutation, invalid Message
+arguments, and invalid Message lifecycle transitions shall invoke the
+fatal-condition handler without silently ignoring error conditions. Retain and
+release operations on a static Message shall be no-ops and shall not invoke the
+fatal-condition handler. Before a fatal enqueue, the destination queue and
+claim counts shall remain unchanged.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-002
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Machine behavior
+
+[REQUIREMENT]
+UID: ZEF-WHAT-020
+TITLE: Hierarchical state behavior
+STATEMENT: >>>
+A Machine shall support nested State nodes, parent-directed message
+handling, explicit handled or unhandled outcomes, transition requests, entry
+and exit behavior, and no allocation during dispatch. If every visited handler
+returns unhandled, dispatch shall complete without changing the current State
+or invoking entry or leave hooks.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-012
+
+[REQUIREMENT]
+UID: ZEF-WHAT-021
+TITLE: Deterministic transitions
+STATEMENT: >>>
+Machine transitions shall leave source states in reverse hierarchy order,
+excluding the common ancestor. They shall then enter target states in
+hierarchy order, following declared initial children. For a self-transition,
+the machine shall execute the leave handler followed by the enter handler for
+the current state before following its declared initial children.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-012
+
+[REQUIREMENT]
+UID: ZEF-WHAT-022
+TITLE: Machine startup and composition
+STATEMENT: >>>
+Machine startup shall enter the root and its initial-child chain exactly once;
+dispatch before startup and repeated startup shall be fatal. A Reactor shall
+support application code dispatching one read-only Message synchronously to a
+primary Machine and to any auxiliary Machines, including submachines, that the
+application creates and manages. The framework shall not create, register,
+schedule, or remove those auxiliary Machines; their lifetime, storage, and
+composition remain application responsibilities.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-012
+
+[REQUIREMENT]
+UID: ZEF-WHAT-023
+TITLE: State graph validity
+STATEMENT: >>>
+A Machine shall validate its State graph during initialization when assertion
+checking is enabled. A malformed graph has a null root, a non-null root parent,
+a non-root node with a null parent, a parent chain that does not reach the
+root, a cycle in parent or initial links, an initial child whose parent is not
+the containing node, or a depth greater than the configured state-depth limit.
+The root shall be non-null and have no parent; a null initial link denotes a
+leaf. A transition target shall be non-null, have a parent chain that reaches
+the root, and remain within the configured depth. In assertion-disabled builds
+the application shall provide a graph with these properties; validation may be
+omitted and behavior for a malformed graph is outside the contract.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-002
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Reactors, Mailboxes, and Kernel
+
+[REQUIREMENT]
+UID: ZEF-WHAT-030
+TITLE: Reactor boundary and lifecycle
+STATEMENT: >>>
+A Reactor shall reference one primary Machine, a bounded Mailbox,
+an application context, and a scheduler identity. Registration shall move a
+constructed Reactor to registered and start shall move it to running. A
+registered Reactor remains in the Kernel registry for the Kernel lifetime;
+Phase 1 provides no stop or remove operation. A registered identity is not a
+stopped state, and posting to an unregistered identity is an invalid argument.
+Auxiliary Machines, including submachines, are application-owned and are not
+part of the framework-managed Reactor lifecycle.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-013
+
+[REQUIREMENT]
+UID: ZEF-WHAT-031
+TITLE: Mailbox behavior
+STATEMENT: >>>
+A Mailbox shall provide bounded FIFO delivery, optional front delivery,
+dequeue, occupancy and free-space observations, selective removal, and claim
+release for every removed dynamic Message. A front delivery is observed before
+all previously queued entries; repeated front deliveries are observed in
+last-in-first-out order. Selective removal shall evaluate its predicate once
+per queued entry in delivery order and shall preserve the relative order of
+entries that remain.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-020
+
+[REQUIREMENT]
+UID: ZEF-WHAT-032
+TITLE: No dynamic Reactor stop or removal
+STATEMENT: >>>
+Phase 1 shall not provide operations that stop or remove a Reactor. A Reactor
+registered with a Kernel remains registered until the Kernel lifetime ends.
+There is no stopped or removed Reactor state and no expected result for a
+stop-or-remove operation. Delivery to an unregistered or invalid Reactor
+identity is an invalid argument and invokes the panic handler.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-013
+
+[REQUIREMENT]
+UID: ZEF-WHAT-033
+TITLE: Application-owned deferred Mailbox
+STATEMENT: >>>
+An application shall be able to initialize a caller-owned Mailbox that is not
+assigned to a Reactor and use it as a local deferred queue. The local queue
+shall have the same bounded ordering, ownership, and removal semantics as a
+Reactor Mailbox, but enqueueing or dequeuing it shall not change a Kernel
+runnable identity or cause automatic dispatch. Application code shall choose
+when and in which Machine state to drain it.
+
+When a handler receives a sealed dynamic Message that must be deferred,
+``postpone`` to the local Mailbox shall retain one claim for the local queue
+without copying the Message storage. For a static Message, it shall enqueue a
+reference without changing claim state. Taking a dynamic entry later shall
+transfer the local queue claim to the application, which shall release it
+after processing or retain it before handing it to another owner. Taking a
+static entry transfers no claim, and the same release operation remains valid
+as a no-op. A full local queue is the same fatal enqueue condition as a full
+Reactor Mailbox.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-014
+- TYPE: Parent
+  VALUE: ZEF-WHY-020
+
+[REQUIREMENT]
+UID: ZEF-WHAT-040
+TITLE: Cooperative scheduling
+STATEMENT: >>>
+The cooperative Kernel shall execute at most one complete Message dispatch per
+finite scheduling step. A dispatch consists of taking one Message, invoking
+    the selected Reactor's primary Machine dispatch and all handler, entry, leave,
+    and transition callbacks caused by that Message, releasing or transferring
+    any dynamic dispatch claim as applicable, and updating runnable state. The
+    Kernel shall run handlers
+to completion without blocking, shall
+select the highest-priority runnable Reactor, and shall break equal-priority
+ties by ascending zero-based Reactor identity. It shall provide an idle path
+when no Reactor is runnable.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-020
+
+[REQUIREMENT]
+UID: ZEF-WHAT-041
+TITLE: Runnable identity invariant
+STATEMENT: >>>
+The Kernel shall use zero-based Reactor identities. A registered,
+running Reactor shall be runnable exactly when its Mailbox is nonempty; the
+Kernel shall clear its runnable identity when the Mailbox becomes empty and
+shall never dispatch an empty Mailbox. A registered Reactor that has not been
+started is not runnable.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-020
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Topics, time, and ports
+
+[REQUIREMENT]
+UID: ZEF-WHAT-050
+TITLE: Topic publication
+STATEMENT: >>>
+The topic service shall maintain subscriptions, make subscription changes safe
+against concurrent publication, snapshot recipients, seal a Message before
+snapshotting, and deliver recipients in descending priority order, breaking
+equal-priority ties by ascending zero-based Reactor identity. A full recipient
+shall be fatal; deliveries completed before the fatal condition are not rolled
+back. Subscription changes and publication snapshots shall be linearized by
+the Port critical section: a change completed after the snapshot does not
+affect that publication, and a change completed before it does.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-021
+
+[REQUIREMENT]
+UID: ZEF-WHAT-060
+TITLE: Clock and Timer behavior
+STATEMENT: >>>
+A Timer shall have disarmed, armed, and expired/disarmed states;
+the Clock service shall support one-shot and periodic timers, enqueue expiry
+Messages rather than invoke application handlers from tick context, and shall
+enqueue expiry Messages that are due on the same tick in their arm order. A period of
+zero shall mean one-shot delivery. A delay of zero shall expire on the next
+Clock tick. A periodic timer expiring at tick T shall be reinserted for T plus
+its period using unsigned modular tick arithmetic, and a timer armed during
+processing of tick T shall not expire until a later tick. Valid delays and
+periods shall be less than half the representable tick range so expiration
+ordering remains unambiguous across wraparound.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-022
+
+[REQUIREMENT]
+UID: ZEF-WHAT-061
+TITLE: Timer lifecycle errors
+STATEMENT: >>>
+Starting an armed Timer shall be fatal, stopping an already
+disarmed Timer shall be an explicit expected observation, and cancellation
+shall stop the Timer and remove that Timer's pending Messages without removing
+unrelated deliveries of the same Message value. Cancellation of a Timer that
+is neither armed nor pending shall return the same expected not-running
+observation as stopping an already disarmed Timer.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-022
+
+[REQUIREMENT]
+UID: ZEF-WHAT-070
+TITLE: Port contract
+STATEMENT: >>>
+The Port shall provide interrupt-state entry and restoration, reschedule
+request, and idle operations; nested critical sections shall restore the prior
+state. The application shall provide one non-returning panic function, separate
+from the Port, and all fatal framework conditions shall call that function.
+The public API shall classify interrupt-context legality, with fixed-pool
+Message construction and the documented Phase 1 posting and publication
+operations supported from ISR context.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-023
+
+[REQUIREMENT]
+UID: ZEF-WHAT-071
+TITLE: Optional preemptive execution
+STATEMENT: >>>
+A Cortex-M0 preemptive port, when included in a phase baseline,
+shall preserve the cooperative run-to-completion contract while allowing
+deferred priority-based context switching and shall define stack, interrupt,
+and safe termination behavior.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-024
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Verification and traceability
+
+[REQUIREMENT]
+UID: ZEF-WHAT-080
+TITLE: Public verification boundary
+STATEMENT: >>>
+Host verification shall exercise the public headers and linked
+library, and shall cover ownership, pools, Mailboxes, Machines, topics, Clock
+service, cooperative scheduling, interrupt masking, idle behavior,
+and any preemptive scheduling model included in the host contract. Target-only
+preemptive context switching is outside host verification unless explicitly
+included in a phase baseline.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-030
+
+[REQUIREMENT]
+UID: ZEF-WHAT-081
+TITLE: Verification matrix
+STATEMENT: >>>
+Verification shall cover reactor-slot counts of 8, 16, and 32;
+topic bitmap cases at one below, exactly at, and one above each bitmap-word
+boundary that is strictly inside the configured topic range, while testing
+only in-range values at the range endpoints; queue capacities of 1, 2, 3, and
+the configured maximum for both Reactor and local deferred Mailboxes;
+``postpone``, take, release, and deferred processing; one-shot
+and periodic timers; one, two, and three Message pools; assertions enabled
+and disabled; and AddressSanitizer and UndefinedBehaviorSanitizer host
+builds.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-030
+
+[REQUIREMENT]
+UID: ZEF-WHAT-082
+TITLE: Traceability completeness
+STATEMENT: >>>
+Every implementation and verification artifact shall link to the
+WHAT, INTERFACE, or IMPLEMENTATION work item it satisfies, every non-root work
+item shall have a parent, and every work item named in a phase baseline shall
+have a downstream artifact or a deferral record naming the reason and target
+phase.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-030
+
+[[/SECTION]]
