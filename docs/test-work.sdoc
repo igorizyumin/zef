@@ -1,0 +1,325 @@
+[DOCUMENT]
+TITLE: ZEF TESTS — verification work items
+UID: ZEF-TEST-DOC
+VERSION: 1.0.0
+DATE: 2026-10-11
+PREFIX: ZEF-TEST
+ROOT: False
+OPTIONS:
+  ENABLE_MID: False
+  MARKUP: Text
+
+[TEXT]
+STATEMENT: >>>
+TEST items identify executable verification scenarios. Each item names the
+behavior under test, traces to the applicable WHAT or INTERFACE record, and
+points to the source test that implements the scenario. The current suite is a
+host C11 suite using the public ``zef.h`` header and the linked ``zef`` library.
+<<<
+
+[[SECTION]]
+TITLE: Public surface and Message ownership
+
+[REQUIREMENT]
+UID: ZEF-TEST-001
+TITLE: Public configuration and consumer compilation
+STATEMENT: >>>
+Compile a consumer translation unit against the public header and
+exercise the published configuration types, constants, complete runtime
+structures, result values, action values, and callback signatures. Compile-time
+assertions check the default limits and tick width, while zero-initialized
+instances cover every complete caller-owned runtime structure.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-001
+- TYPE: Parent
+  VALUE: ZEF-IF-004
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-002
+TITLE: Fixed-pool Message construction and typed access
+STATEMENT: >>>
+Initialize caller-owned pools, construct a typed dynamic Message,
+verify smallest-suitable-pool selection, read its topic and payload size, and
+obtain the typed payload after transfer and dequeue. The scenario then requests
+a payload that fits only the larger pool and verifies that the larger pool is
+selected and reclaimed after release, while the mutable typed accessor is
+checked during construction.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-010
+- TYPE: Parent
+  VALUE: ZEF-IF-012
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-003
+TITLE: Dynamic claims, static Messages, and deferred ownership
+STATEMENT: >>>
+Exercise retain and release, final pool reclamation, static Message
+no-op cleanup, and ``postpone`` reference sharing without copying the Message
+storage. The dynamic scenario retains, releases, postpones, and takes the same
+Message while checking reference sharing and final pool availability; the static
+scenario performs generic retain/release cleanup without changing lifetime.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-011
+- TYPE: Parent
+  VALUE: ZEF-WHAT-012
+- TYPE: Parent
+  VALUE: ZEF-IF-011
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-004
+TITLE: Panic boundary and failure-state preservation
+STATEMENT: >>>
+Catch the application panic callback for pool exhaustion, Mailbox overflow,
+invalid pool, Mailbox, and static-Message arguments, invalid mutable lifecycle
+access, checked-payload size mismatch, and release of a reclaimed Message.
+Verify each reported panic reason and confirm that a failed allocation leaves
+pool statistics unchanged and a full-Mailbox post leaves its sender pointer
+intact before completing the valid cleanup path.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-013
+- TYPE: Parent
+  VALUE: ZEF-IF-002
+- TYPE: Parent
+  VALUE: ZEF-IF-010
+- TYPE: Parent
+  VALUE: ZEF-IF-013
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Mailboxes and Machines
+
+[REQUIREMENT]
+UID: ZEF-TEST-010
+TITLE: Mailbox ordering, statistics, and selective removal
+STATEMENT: >>>
+Exercise FIFO delivery, front insertion ordering, occupancy and
+minimum-free-space observations, empty take behavior, and stable predicate
+removal while preserving the remaining static Message order. A second
+capacity-two Mailbox also exercises front insertion on an empty ring and
+normal posts and takes after the monotonic indices wrap. A dynamic removal
+case verifies that removed claims are released while the retained entry stays
+available, and the public capacity statistic is checked.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-031
+- TYPE: Parent
+  VALUE: ZEF-IF-013
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-011
+TITLE: Hierarchical Machine startup and transitions
+STATEMENT: >>>
+Start a descriptor graph with an initial child, dispatch a Message
+that transitions between sibling states, verify leave and enter order, repeat
+the operation as a self-transition, and verify parent-handler bubbling from
+the child state. An outside transition target is rejected without changing the
+current state. The public current-state result is checked after each path.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-020
+- TYPE: Parent
+  VALUE: ZEF-WHAT-021
+- TYPE: Parent
+  VALUE: ZEF-WHAT-022
+- TYPE: Parent
+  VALUE: ZEF-IF-020
+- TYPE: Parent
+  VALUE: ZEF-IF-021
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-012
+TITLE: Nested Machine common-ancestor transitions
+STATEMENT: >>>
+Construct a hierarchy with a root, two nested application branches, sibling
+leaves, and a separate emergency branch, each with initial-child links. Start
+at the deepest initial leaf, then transition between siblings, across nested
+branches, to an ancestor that re-enters its initial chain, across the root,
+and through a self-transition. Compare the complete hook-event sequence after
+each dispatch to verify reverse source exits, the lowest common ancestor, target
+entry order, initial-child descent, and parent-handler bubbling; reject an
+outside target without changing the current state.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-020
+- TYPE: Parent
+  VALUE: ZEF-WHAT-021
+- TYPE: Parent
+  VALUE: ZEF-WHAT-022
+- TYPE: Parent
+  VALUE: ZEF-WHAT-023
+- TYPE: Parent
+  VALUE: ZEF-IF-020
+- TYPE: Parent
+  VALUE: ZEF-IF-021
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Reactors, Kernel, and topics
+
+[REQUIREMENT]
+UID: ZEF-TEST-020
+TITLE: Reactor lifecycle and cooperative priority scheduling
+STATEMENT: >>>
+Register multiple Reactors at explicit identities, including a temporary gap,
+and start them out of identity order. Post work to their Mailboxes and verify
+highest-identity selection, strict dispatch priority, and the no-work result
+after delivery. One Reactor receives queued work before it starts to verify
+that it is ignored until startup.
+The no-work path also enters ``run_forever`` with an idle callback that exits
+the fixture, verifying that idle is called instead of dispatching stale work.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-030
+- TYPE: Parent
+  VALUE: ZEF-WHAT-040
+- TYPE: Parent
+  VALUE: ZEF-WHAT-041
+- TYPE: Parent
+  VALUE: ZEF-IF-022
+- TYPE: Parent
+  VALUE: ZEF-IF-030
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-021
+TITLE: Topic subscription snapshot and publication order
+STATEMENT: >>>
+Subscribe multiple Reactors, publish one shared dynamic Message,
+verify delivery count, descending-identity handling, and claim reclamation
+after all recipients process the Message. Duplicate subscription is checked for
+idempotence, and publication to a topic with no subscribers verifies immediate
+zero-recipient reclamation.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-050
+- TYPE: Parent
+  VALUE: ZEF-IF-031
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Clock, timers, and Port boundary
+
+[REQUIREMENT]
+UID: ZEF-TEST-030
+TITLE: One-shot and periodic timer delivery
+STATEMENT: >>>
+Arm a zero-delay one-shot Timer and a periodic Timer, advance the
+Clock, verify enqueue-only expiration, verify periodic due ticks, and verify
+stopping an already disarmed Timer returns the documented observation.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-060
+- TYPE: Parent
+  VALUE: ZEF-WHAT-061
+- TYPE: Parent
+  VALUE: ZEF-IF-032
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-031
+TITLE: Timer-specific cancellation
+STATEMENT: >>>
+Queue an ordinary delivery and a Timer delivery using the same
+static Message reference, cancel the Timer, and verify only the Timer-owned
+entry is removed.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-061
+- TYPE: Parent
+  VALUE: ZEF-IF-032
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-032
+TITLE: Port critical-section and reschedule callbacks
+STATEMENT: >>>
+Exercise the host Port fixture's nested critical-state restoration,
+reschedule notification from runnable Mailbox changes, and topic operations
+through the public Port callback structure. The fixture records entry and leave
+counts, verifies nested state restoration, and observes reschedule requests
+from startup, subscription changes, and queued work. A second kernel with all
+Port callbacks null verifies the optional callback paths remain usable.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-070
+- TYPE: Parent
+  VALUE: ZEF-IF-040
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-033
+TITLE: Timer ownership and same-tick ordering corners
+STATEMENT: >>>
+Arm two topic Timers for the same tick and verify their queued order matches
+arm order without invoking a handler during Clock advancement. Then initialize
+a payload-based periodic Timer, stop it with a pending delivery, take and
+release that delivery, verify the Timer retains its base claim, and re-arm it
+successfully before terminal cancellation. A second dynamic Timer is cancelled
+with a pending delivery to verify private-message removal, claim cleanup, and
+the ``Z_NOT_RUNNING`` result after cancellation. The same
+fixture also checks the configured span overflow panic and the double-arm
+lifecycle panic before stopping the valid Timer.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-060
+- TYPE: Parent
+  VALUE: ZEF-WHAT-061
+- TYPE: Parent
+  VALUE: ZEF-IF-032
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[[/SECTION]]

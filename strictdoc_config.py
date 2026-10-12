@@ -9,7 +9,9 @@ def create_config() -> ProjectConfig:
         project_features=["REQUIREMENT_TO_SOURCE_TRACEABILITY"],
         include_source_paths=[
             "docs/**",
-            "framework/**",
+            "include/**",
+            "src/**",
+            "CMakeLists.txt",
             "strictdoc_config.py",
             "tests/**",
         ],

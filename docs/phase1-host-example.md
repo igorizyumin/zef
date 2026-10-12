@@ -5,19 +5,21 @@ can be explained without prototype terminology or implementation fields.
 
 ## Scenario
 
-Two Reactors are registered with the cooperative Kernel:
+Two Reactors are registered with the cooperative Kernel at explicit strict
+priority identities:
 
 - `button_reactor` has priority 1 and subscribes to topic `BUTTON_PRESSED`.
 - `lamp_reactor` has priority 2 and subscribes to topic `LAMP_COMMAND`.
 
 The host test creates a dynamic Message with topic `BUTTON_PRESSED`, allocates
 space for a typed `ButtonPressed` payload, initializes that payload through a
-`ZMsg` handle, and publishes it. Publication seals the message and snapshots
+`ZMsg` pointer, and publishes it. Publication transfers the message and snapshots
 subscribers and enqueues the same immutable Message into each successful
 Mailbox. Each Mailbox claim is released after dispatch. A handler can validate
 the topic and payload size before reading the typed payload. The button Reactor
 then creates a second building Message with topic `LAMP_COMMAND` and transfers
-its claim to the lamp Reactor with a normal post, which seals it automatically.
+its reference to the lamp Reactor with a normal post, which nulls the sender
+pointer automatically.
 
 ## Contract-shaped pseudocode
 
@@ -30,7 +32,7 @@ ZReactor button_reactor;
 ZReactor lamp_reactor;
 ZReactorId button_id;
 ZReactorId lamp_id;
-ZMsg button_message;
+    ZMsg *button_message = NULL;
 uint16_t delivered;
 
 typedef struct {
@@ -58,6 +60,6 @@ while (z_kernel_run_one(&kernel) == Z_WORK_DONE) {
 ```
 
 The example demonstrates that a caller can reason about construction, typed
-payload access, automatic sealing at publication, Mailbox delivery, Reactor
+payload access, automatic sender-pointer consumption at publication, Mailbox delivery, Reactor
 dispatch, and cooperative scheduling using only the Phase 1 vocabulary. It
 does not define storage declarations or final function names.

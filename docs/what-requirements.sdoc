@@ -130,10 +130,10 @@ RELATIONS:
 UID: ZEF-WHAT-011
 TITLE: Message lifecycle and ownership
 STATEMENT: >>>
-A dynamic Message shall begin with one creator claim, progress from
-building to sealed to reclaimed, and be reclaimed only after all ownership
-claims are released. A building Message shall be writable only by its creator;
-a sealed Message shall be immutable and shareable. A static Message shall be
+A dynamic Message shall begin with one creator reference and be reclaimed only
+after all references are released. A Message is writable through its mutable
+construction pointer before transfer; framework-delivered Messages are read
+through borrowed const pointers and may be shared by retaining references. A static Message shall be
 initialized once, remain immutable for its caller-defined lifetime, and shall
 not be associated with a Message pool or ownership claim. The framework shall
 identify static Messages before applying dynamic claim or pool-reclamation
@@ -147,12 +147,12 @@ RELATIONS:
 UID: ZEF-WHAT-012
 TITLE: Delivery ownership
 STATEMENT: >>>
-A successful normal delivery shall transfer one ownership claim to
-its destination, and a failed delivery shall create no destination claim or
-queued entry. A ``postpone`` delivery shall add one claim, and dequeue shall
-transfer the destination claim to the receiver. Publication shall create one
-claim per successful recipient without copying Message storage; publication to
-zero recipients shall consume the creator claim and return a zero delivery
+A successful normal delivery shall transfer one reference to its destination,
+and a failed delivery shall create no destination reference or queued entry. A
+``postpone`` delivery shall add one reference, and dequeue shall transfer the
+destination reference to the receiver. Publication shall create one reference
+per successful recipient without copying Message storage; publication to zero
+recipients shall consume the creator reference and return a zero delivery
 count. Static delivery shall enqueue a reference without changing claim
 counts; the same static Message may be delivered repeatedly and to multiple
 destinations. Static delivery shall not copy the payload, and queued static
@@ -167,8 +167,8 @@ RELATIONS:
 UID: ZEF-WHAT-013
 TITLE: Message failure behavior
 STATEMENT: >>>
-Pool exhaustion, full-destination delivery, dynamic claim overflow, release of
-a dynamic Message without a claim, post-seal mutation, invalid Message
+Pool exhaustion, full-destination delivery, dynamic reference-count overflow,
+release of a dynamic Message without a reference, invalid Message
 arguments, and invalid Message lifecycle transitions shall invoke the
 fatal-condition handler without silently ignoring error conditions. Retain and
 release operations on a static Message shall be no-ops and shall not invoke the
@@ -310,7 +310,7 @@ Reactor Mailbox, but enqueueing or dequeuing it shall not change a Kernel
 runnable identity or cause automatic dispatch. Application code shall choose
 when and in which Machine state to drain it.
 
-When a handler receives a sealed dynamic Message that must be deferred,
+When a handler receives a borrowed dynamic Message that must be deferred,
 ``postpone`` to the local Mailbox shall retain one claim for the local queue
 without copying the Message storage. For a static Message, it shall enqueue a
 reference without changing claim state. Taking a dynamic entry later shall
@@ -337,9 +337,9 @@ finite scheduling step. A dispatch consists of taking one Message, invoking
     any dynamic dispatch claim as applicable, and updating runnable state. The
     Kernel shall run handlers
 to completion without blocking, shall
-select the highest-priority runnable Reactor, and shall break equal-priority
-ties by ascending zero-based Reactor identity. It shall provide an idle path
-when no Reactor is runnable.
+select the highest-index runnable Reactor, where the zero-based Reactor identity
+is also its strict priority. It shall provide an idle path when no Reactor is
+runnable.
 <<<
 RELATIONS:
 - TYPE: Parent
@@ -349,7 +349,8 @@ RELATIONS:
 UID: ZEF-WHAT-041
 TITLE: Runnable identity invariant
 STATEMENT: >>>
-The Kernel shall use zero-based Reactor identities. A registered,
+The Kernel shall use explicit zero-based Reactor identities, with identity also
+defining strict priority. Registered identities may have gaps. A registered,
 running Reactor shall be runnable exactly when its Mailbox is nonempty; the
 Kernel shall clear its runnable identity when the Mailbox becomes empty and
 shall never dispatch an empty Mailbox. A registered Reactor that has not been
@@ -369,9 +370,9 @@ UID: ZEF-WHAT-050
 TITLE: Topic publication
 STATEMENT: >>>
 The topic service shall maintain subscriptions, make subscription changes safe
-against concurrent publication, snapshot recipients, seal a Message before
-snapshotting, and deliver recipients in descending priority order, breaking
-equal-priority ties by ascending zero-based Reactor identity. A full recipient
+against concurrent publication, snapshot recipients, consume the sender pointer before
+snapshotting, and deliver recipients in descending zero-based Reactor identity
+order, which is also descending strict priority order. A full recipient
 shall be fatal; deliveries completed before the fatal condition are not rolled
 back. Subscription changes and publication snapshots shall be linearized by
 the Port critical section: a change completed after the snapshot does not
@@ -406,10 +407,13 @@ TITLE: Timer lifecycle errors
 STATEMENT: >>>
 Starting an armed Timer shall be fatal, stopping an already
 disarmed Timer shall be an explicit expected observation, and cancellation
-shall stop the Timer and remove that Timer's pending Messages without removing
-unrelated deliveries of the same Message value. Cancellation of a Timer that
+shall stop the Timer and remove that Timer's pending private Message deliveries
+without removing unrelated deliveries. Cancellation of a Timer that
 is neither armed nor pending shall return the same expected not-running
-observation as stopping an already disarmed Timer.
+observation as stopping an already disarmed Timer when it has no retained
+dynamic Message claim. Stopping a Timer shall preserve its configured Message
+and retained base claim so the Timer can be armed again; cancellation is the
+terminal operation that releases that retained claim.
 <<<
 RELATIONS:
 - TYPE: Parent

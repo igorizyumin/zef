@@ -27,7 +27,7 @@ UID: ZEF-IF-001
 TITLE: Public runtime structures and reserved members
 STATEMENT: >>>
 The public headers provide complete C structure definitions for ``ZMessagePool``,
-``ZMessagePoolSet``, ``ZMsgHandle``, ``ZMsg``, ``ZMailbox``, ``ZMachine``, ``ZReactor``, ``ZKernel``,
+``ZMessagePoolSet``, ``ZMsg``, ``ZMsg``, ``ZMailbox``, ``ZMachine``, ``ZReactor``, ``ZKernel``,
 ``ZTopicTable``, ``ZClock``, ``ZTimer``, and ``ZPort``. An application can
 therefore allocate these objects automatically, statically, or as members of
 an application-owned structure. Framework-owned members are private by intent:
@@ -164,7 +164,8 @@ whose framework-owned members are reserved by documentation. Functions return
 ``ZResult`` only when the outcome is an
 expected part of normal control flow. Fatal conditions invoke the user-supplied
 panic handler and do not return. Output parameters are written only on success.
-Pointers to sealed Messages are read-only in all application-facing APIs.
+Messages delivered to application code are exposed as read-only borrowed
+``ZMsg const *`` references in all application-facing APIs.
 
 The exact enum width is a configuration decision, but numeric values remain
 stable within one build. ``Z_EMPTY``, ``Z_NOT_RUNNING``, and ``Z_NOT_FOUND``
@@ -214,14 +215,19 @@ Mailbox surface
 The Mailbox owns a caller-provided ring of read-only Message pointers. The ring
 has monotonic head and tail indices and never allocates.
 
-``post`` and ``post_front`` seal and consume a building ``ZMsg``, transferring
-its creator claim to the destination. ``postpone`` retains an already sealed
-Message for the destination Mailbox before enqueueing it for later handling. A
+``post`` and ``post_front`` consume a ``ZMsg **`` construction pointer, transfer
+its creator reference to the destination, and set the caller's pointer to NULL.
+``postpone`` retains an existing Message for the destination Mailbox before
+enqueueing it for later handling. A
 full Mailbox invokes the panic handler with
 ``Z_PANIC_MAILBOX_FULL`` and does not return. A successful ``take`` transfers
 the Mailbox claim to the caller; an empty ``take`` returns ``Z_EMPTY``.
 Removal releases each removed dynamic Message claim and returns the number
-removed.
+removed. Operations on a Reactor Mailbox enter the Kernel Port critical
+section while inspecting or modifying the ring, so interrupt-context posting
+cannot race with thread-context taking or removal. An unassigned local
+Mailbox has no Kernel critical section and remains the application's
+responsibility to serialize when shared across execution contexts.
 <<<
 
 [TEXT]
@@ -247,7 +253,9 @@ Reactor and Kernel surface
 --------------------------
 
 The Reactor binds a Machine and Mailbox to a scheduler identity. Registration
-assigns a zero-based endpoint index exactly once.
+assigns an explicit zero-based endpoint index exactly once. The endpoint index
+is also the Reactor's strict priority: larger indices run first. Indices may
+have gaps, and an unregistered index is not runnable or publishable.
 
 Registration and initialization failures invoke the panic handler. A Reactor
 identity remains registered for the Kernel lifetime; Phase 1 has no stop or
@@ -255,9 +263,8 @@ remove operation and no stopped or removed Reactor state.
 
 The Kernel owns the runnable bitmap and registry. Its finite host surface is:
 
-``z_kernel_run_one`` dispatches at most one Message, selects the highest-priority
-runnable Reactor, breaks equal-priority ties by ascending zero-based Reactor
-identity, updates runnable state after the Mailbox changes, and returns
+``z_kernel_run_one`` dispatches at most one Message, selects the highest-index
+runnable Reactor, updates runnable state after the Mailbox changes, and returns
 ``Z_NO_WORK`` when the runnable bitmap is zero. ``run_forever`` calls the Port
 idle operation whenever ``run_one`` reports no work.
 <<<
@@ -270,10 +277,10 @@ Topic publication surface
 Topic tables contain one subscriber bitmap per topic and use a critical section
 for subscription changes and publication snapshots.
 
-Publication seals and consumes the building ``ZMsg`` before taking the
-subscriber snapshot. Recipients are processed in descending priority order;
-equal-priority recipients are processed in ascending zero-based Reactor
-identity order. If any recipient is full, publication invokes the panic
+Publication consumes the caller's ``ZMsg **`` before taking the subscriber
+snapshot and sets it to NULL. Recipients are processed in descending Reactor identity
+order, which is also descending priority order. If any recipient is full,
+publication invokes the panic
 handler with ``Z_PANIC_MAILBOX_FULL`` and does not return. Partial-delivery
 recovery is not provided after the fatal condition; recipients processed before
 the panic retain their claims. On normal return, each processed recipient
@@ -288,14 +295,13 @@ STATEMENT: >>>
 Clock and Timer surface
 -----------------------
 
-Timers are caller-owned nodes in a delta list. ``z_timer_init`` transfers one
-dynamic Message claim to the Timer; the caller must not release that claim
-after initialization. The Timer retains ownership while armed and releases it
-when disarmed with no pending delivery. Each pending dynamic delivery has its
-own claim. Static immutable Messages require no claim bookkeeping.
-``z_timer_init_topic`` creates a timer-owned immutable zero-payload Message for
-the supplied topic without using a Message pool. Timer expiration posts a
-Message and never invokes an application handler from tick context.
+Timers are caller-owned nodes in a linked list. ``z_timer_init_payload`` creates
+one private dynamic Message for the Timer by copying the supplied payload into
+a Message pool; the Timer owns its base claim for its initialized lifetime.
+Each pending dynamic delivery retains one additional claim. Static topic timers
+use an embedded immutable zero-payload Message and require no Message pool.
+Timer expiration posts a Message and never invokes an application handler from
+tick context.
 
 An armed Timer cannot be armed again; attempting to do so invokes the panic
 handler with ``Z_PANIC_STATE``. A period of zero means one-shot delivery. A
@@ -305,9 +311,9 @@ Timer armed during processing of tick T is not eligible until a later tick.
 Timers due on the same tick are posted in arm order; delays and periods are
 limited to the configured less-than-half-range maximum.
 Stopping unlinks it immediately and returns ``Z_NOT_RUNNING`` when it was
-already stopped. Cancellation stops the Timer and removes only that Timer's
-pending Messages; it does not remove unrelated deliveries of the same Message
-value.
+already stopped. Cancellation stops the Timer and removes its pending private
+Message deliveries. Because each Timer owns a distinct Message, cancellation
+cannot remove an unrelated delivery.
 <<<
 
 [TEXT]
@@ -315,21 +321,20 @@ STATEMENT: >>>
 Message ownership and typed payload surface
 --------------------------------------------
 
-Message construction uses a mutable ``ZMsg`` handle. It is valid only between
-``z_message_begin`` and the first consuming post or publication. The consuming
-operation seals the Message before enqueueing it; the resulting ``ZMsgHandle``
-is immutable and may be shared.
+Message construction uses a mutable ``ZMsg *``. The pointer is valid from
+``z_message_begin`` until a consuming post or publication, which transfers it
+to the framework and sets the caller's pointer to NULL. Handlers receive the
+same object through a borrowed ``ZMsg const *`` reference.
 
-``z_message_begin`` creates one creator claim and returns a non-null pointer to
+``z_message_begin`` creates one creator reference and returns a non-null pointer to
 the complete mutable payload region. The payload size includes the complete
 application payload; the allocator uses the envelope-plus-payload size to
 select the smallest available block size that can contain the complete
 Message, with caller-supplied order breaking equal-size ties. ``z_mailbox_post``,
-``z_mailbox_post_front``, and ``z_topic_publish`` seal the ``ZMsg`` before
-enqueueing or taking the subscriber snapshot, then consume the creator claim.
-A normal delivery transfers the caller's claim; ``postpone`` retains an
-additional claim for the destination Mailbox on an already sealed handle while
-the caller keeps its existing claim. Pool exhaustion uses
+``z_mailbox_post_front``, and ``z_topic_publish`` consume the ``ZMsg **`` before
+enqueueing or taking the subscriber snapshot. A normal delivery transfers the
+caller reference; ``postpone`` retains an additional reference for the
+destination Mailbox while the caller keeps its existing reference. Pool exhaustion uses
 ``Z_PANIC_NO_MEMORY`` and does not return an exhausted result. Invalid
 construction lifecycle violations also panic. Retain and release are no-ops
 for static Messages, so generic receiver cleanup does not need to branch on
@@ -338,13 +343,13 @@ Message kind. Dynamic release reclaims the block only after the last claim.
 Static Messages may be declared as immutable objects and are accepted by
 read-only delivery APIs without pool bookkeeping.
 
-``ZMsgHandle`` is a complete public structure whose framework-owned members are
+``ZMsg`` is a complete public structure whose framework-owned members are
 reserved by documentation. Applications define the payload type rather than
 reading or modifying those reserved members. In Phase 1, ``ZTopic`` is also the
 payload type identifier, so each topic has one documented payload schema. The
 payload size is stored in the Message envelope.
 
-Posting seals the Message. A receiving handler reads the payload through the
+Posting transfers the Message. A receiving handler reads the payload through the
 const accessor:
 
 Checked access invokes the panic handler with ``Z_PANIC_PAYLOAD_SIZE`` when the
@@ -363,8 +368,9 @@ STATEMENT: >>>
 Port contract
 -------------
 
-The host Port implements fake interrupt masking. The Cortex-M0 Port maps the
-same contract to ``PRIMASK`` and ``PendSV``.
+The host Port implements fake interrupt masking. A Cortex-M0 Port that maps
+the same contract to ``PRIMASK`` and ``PendSV`` is deferred to a later phase;
+the current baseline is the generic cooperative core and its host Port.
 
 Critical leave restores the saved state. The Port is an internal framework
 adapter; it does not own the application panic boundary and does not classify
@@ -383,23 +389,23 @@ TITLE: Messages, pools, and Mailboxes
 UID: ZEF-IF-010
 TITLE: Message construction and access
 STATEMENT: >>>
-The construction handle is mutable only before a consuming operation; the
-sealed handle is const to callers. The construction and read surface is:
+The construction pointer is mutable only before a consuming operation; handlers
+receive a borrowed const pointer. The construction and read surface is:
 
 .. code-block:: c
 
    void *z_message_begin(ZMessagePoolSet *pool_set,
                          ZTopic topic,
                          size_t payload_size,
-                         ZMsg *message);
+                         ZMsg **message);
    void *z_message_payload_mut(ZMsg *message);
    void *z_message_payload_mut_checked(ZMsg *message,
                                        size_t expected_size);
 
-   ZTopic z_message_topic(ZMsgHandle const *message);
-   size_t z_message_payload_size(ZMsgHandle const *message);
-   void const *z_message_payload(ZMsgHandle const *message);
-   void const *z_message_payload_checked(ZMsgHandle const *message,
+   ZTopic z_message_topic(ZMsg const *message);
+   size_t z_message_payload_size(ZMsg const *message);
+   void const *z_message_payload(ZMsg const *message);
+   void const *z_message_payload_checked(ZMsg const *message,
                                          size_t expected_size);
 
    #define Z_MSG_BEGIN(pool_set_, topic_, Type_, msg_) \
@@ -417,7 +423,7 @@ sealed handle is const to callers. The construction and read surface is:
        size_t length;
    } ZIoRequest;
 
-   ZMsg msg;
+    ZMsg *msg = NULL;
    ZIoRequest *request =
        Z_MSG_BEGIN(&message_pools, Z_IO_REQUEST, ZIoRequest, &msg);
    request->address = address;
@@ -425,15 +431,15 @@ sealed handle is const to callers. The construction and read surface is:
    request->length = length;
    z_mailbox_post(&mailbox, &msg);
 
-   void handle_io_request(ZMsgHandle const *message)
+   void handle_io_request(ZMsg const *message)
    {
        ZIoRequest const *request = Z_MSG_PAYLOAD(message, ZIoRequest);
    }
 
 The typed construction and access macros validate the fixed payload size. A
 valid call returns a non-null pointer; size mismatch and invalid lifecycle
-conditions use the panic boundary. Read access to a dynamic sealed Message
-requires the caller to hold a live claim; an absent or stale dynamic claim is
+conditions use the panic boundary. Read access to a dynamic Message requires
+the caller to hold a live reference; an absent or stale dynamic reference is
 an ownership violation. Read access to a static Message requires only that the
 caller-owned Message and payload remain alive and immutable.
 <<<
@@ -449,19 +455,19 @@ RELATIONS:
 UID: ZEF-IF-011
 TITLE: Message ownership operations
 STATEMENT: >>>
-Ownership operations apply to sealed ``ZMsgHandle`` values. Normal post
-transfers the caller claim; ``postpone`` adds a claim; dequeue transfers the
-Mailbox claim to the receiver; final release returns the block to its
+Ownership operations apply to dynamic ``ZMsg`` values. Normal post transfers
+the caller reference; ``postpone`` adds a reference; dequeue transfers the
+Mailbox reference to the receiver; final release returns the block to its
 originating pool.
 
 .. code-block:: c
 
-   void z_message_retain(ZMsgHandle const *message);
-   void z_message_release(ZMsgHandle const *message);
+   void z_message_retain(ZMsg const *message);
+   void z_message_release(ZMsg const *message);
 
-For a dynamic Message, retain adds one claim, release removes one claim, and
-the final release returns the block to its originating pool. Dynamic claim
-overflow, release without a dynamic claim, and post-seal mutation are panic
+For a dynamic Message, retain adds one reference, release removes one
+reference, and the final release returns the block to its originating pool.
+Reference-count overflow and release without a dynamic reference are panic
 conditions. For a static immutable Message, retain and release are no-ops;
 they do not inspect or change a claim count and never return the Message to a
 pool. Callers may therefore use the same cleanup path for either Message kind
@@ -538,21 +544,21 @@ surface is:
 .. code-block:: c
 
    void z_mailbox_init(ZMailbox *mailbox,
-                       ZMsgHandle const **slots,
+                       ZMsg const **slots,
                        uint16_t capacity);
-   void z_mailbox_post(ZMailbox *mailbox, ZMsg *message);
+    void z_mailbox_post(ZMailbox *mailbox, ZMsg **message);
    void z_mailbox_postpone(ZMailbox *mailbox,
-                           ZMsgHandle const *message);
-   void z_mailbox_post_front(ZMailbox *mailbox, ZMsg *message);
+                           ZMsg const *message);
+    void z_mailbox_post_front(ZMailbox *mailbox, ZMsg **message);
    ZResult z_mailbox_take(ZMailbox *mailbox,
-                          ZMsgHandle const **message_out);
+                          ZMsg const **message_out);
 
    uint16_t z_mailbox_count(ZMailbox const *mailbox);
    uint16_t z_mailbox_capacity(ZMailbox const *mailbox);
    uint16_t z_mailbox_free(ZMailbox const *mailbox);
    uint16_t z_mailbox_min_free(ZMailbox const *mailbox);
 
-   typedef ZBool (*ZMsgPredicate)(ZMsgHandle const *message, void *context);
+   typedef ZBool (*ZMsgPredicate)(ZMsg const *message, void *context);
    uint16_t z_mailbox_remove_if(ZMailbox *mailbox,
                                 ZMsgPredicate predicate,
                                 void *context);
@@ -567,28 +573,28 @@ predicate is an invalid argument and invokes the panic handler. The minimum
 free-space observation is initialized to capacity and records the lowest free
 space reached since Mailbox initialization. Operations on an unassigned local
 Mailbox never update a Kernel runnable identity and never dispatch Messages
-automatically. An application may defer a sealed Message received by a handler
+automatically. An application may defer a Message received by a handler
 with ``z_mailbox_postpone`` and later call ``z_mailbox_take`` when the
 owning Machine reaches the appropriate state. For a dynamic Message, the
 application then owns the returned claim and releases it after processing. For
 a static Message, the application receives a reference with no claim; calling
 ``z_message_release`` after processing is still valid and is a no-op. The
-``postpone`` name means that the sealed Message is retained for later handling;
-the sealed Message storage is shared between the existing caller claim and the
-new Mailbox claim for dynamic Messages, while static Messages simply share the
+``postpone`` name means that the Message is retained for later handling; the
+Message storage is shared between the existing caller reference and the new
+Mailbox reference for dynamic Messages, while static Messages simply share the
 same reference. The payload is not copied.
 
 .. code-block:: c
 
    ZMailbox deferred;
-   ZMsgHandle const *deferred_slots[4];
+   ZMsg const *deferred_slots[4];
    z_mailbox_init(&deferred, deferred_slots, 4);
 
-   /* In a handler that must defer the current sealed Message. */
+    /* In a handler that must defer the current borrowed Message. */
    z_mailbox_postpone(&deferred, message);
 
    /* In the application-selected state that is ready to process it. */
-   ZMsgHandle const *deferred_message;
+   ZMsg const *deferred_message;
    if (z_mailbox_take(&deferred, &deferred_message) == Z_OK) {
        z_machine_dispatch(machine, deferred_message);
        z_message_release(deferred_message);
@@ -627,6 +633,8 @@ application context, but not descriptor storage.
        ZStateHandler handle;
        ZStateHook enter;
        ZStateHook leave;
+       ZStateNode const *children;
+       ZStateNode const *sibling;
    };
 
    void z_machine_init(ZMachine *machine,
@@ -634,10 +642,15 @@ application context, but not descriptor storage.
                        void *context);
    void z_machine_start(ZMachine *machine);
    void z_machine_dispatch(ZMachine *machine,
-                           ZMsgHandle const *message);
+                           ZMsg const *message);
    ZStateNode const *z_machine_state(ZMachine const *machine);
 
-Initialization validates the root and State graph in assertion-enabled builds;
+``children`` and ``sibling`` optionally describe the complete child graph for
+initialization-time validation. When supplied, every listed child must point
+back to its containing node, the initial child must be listed, and sibling
+cycles are rejected. Legacy descriptors may leave them null, in which case
+the ``initial`` chain remains the declared graph. Initialization validates the
+root and State graph in assertion-enabled builds;
 an invalid graph invokes the panic handler with ``Z_PANIC_STATE`` before
 initialization completes. In assertion-disabled builds the application is
 responsible for supplying a valid graph. Handlers receive a const Message
@@ -675,7 +688,7 @@ The action vocabulary and callback types are:
    } ZAction;
 
    typedef ZAction (*ZStateHandler)(void *context,
-                                    ZMsgHandle const *message);
+                                    ZMsg const *message);
    typedef void (*ZStateHook)(void *context);
 
 Handlers return an action; hooks return no value. ``ZAction.target`` shall be
@@ -718,15 +731,15 @@ any auxiliary Machines or submachines.
                        ZReactorConfig const *config);
    ZReactorId z_reactor_register(ZKernel *kernel,
                                  ZReactor *reactor,
-                                 ZPriority priority);
+                                 ZReactorId id);
    void z_reactor_start(ZKernel *kernel, ZReactorId id);
 
 Initialization and registration failures use the panic boundary. Registration
-is valid only for a constructed Reactor and assigns its identity exactly once;
-the identity remains registered for the Kernel lifetime. Start is valid only
-for a registered Reactor and may be called once. There is no stopped or removed
-Reactor state in Phase 1. Posting to an unregistered identity is an invalid
-argument and invokes the panic handler.
+is valid only for a constructed Reactor, an in-range unoccupied identity, and
+assigns that identity exactly once; the identity remains registered for the
+Kernel lifetime. Start is valid only for a registered Reactor and may be called
+once. There is no stopped or removed Reactor state in Phase 1. Posting to an
+unregistered identity is an invalid argument and invokes the panic handler.
 <<<
 RELATIONS:
 - TYPE: Parent
@@ -780,9 +793,9 @@ UID: ZEF-IF-031
 TITLE: Topic surface
 STATEMENT: >>>
 A topic identifies a documented payload schema. A TopicTable is bound to one
-Kernel at initialization so it can validate Reactor identities and read their
-priorities for publication ordering. Publication accepts a building ``ZMsg``
-and returns a delivery count on normal completion.
+Kernel at initialization so it can validate Reactor identities and use their
+strict identity priorities for publication ordering. Publication accepts a
+building ``ZMsg`` and returns a delivery count on normal completion.
 
 .. code-block:: c
 
@@ -817,42 +830,45 @@ RELATIONS:
 UID: ZEF-IF-032
 TITLE: Clock and Timer surface
 STATEMENT: >>>
-Timer inputs include a destination Reactor identity, an immutable timer Message,
-delay, and period. The Timer records which deliveries it posted so cancellation
-cannot remove unrelated deliveries that use the same Message value. The Clock
-and Timer surface is:
+Timer inputs include a destination Reactor identity, a timer-owned immutable
+Message, delay, and period. The Clock and Timer surface is:
 
 .. code-block:: c
 
    void z_clock_init(ZClock *clock, ZKernel *kernel);
-   void z_timer_init(ZTimer *timer,
-                     ZClock *clock,
-                     ZReactorId destination,
-                     ZMsgHandle const *message);
    void z_timer_init_topic(ZTimer *timer,
                            ZClock *clock,
                            ZReactorId destination,
                            ZTopic topic);
+   void z_timer_init_payload(ZTimer *timer,
+                             ZClock *clock,
+                             ZReactorId destination,
+                             ZMessagePoolSet *pool_set,
+                             ZTopic topic,
+                             void const *payload,
+                             size_t payload_size);
    void z_timer_arm(ZTimer *timer, ZTick delay, ZTick period);
    ZResult z_timer_stop(ZTimer *timer);
    ZResult z_timer_cancel(ZTimer *timer);
    void z_clock_tick(ZClock *clock);
 
-``z_timer_init`` transfers one caller-owned dynamic Message claim to the Timer;
-the caller shall not release that claim after initialization. The Timer keeps
-that ownership while armed and releases it when the Timer is disarmed and has
-no pending delivery. A static immutable Message transfers no claim. The Timer
-retains an additional claim for each pending dynamic delivery. The
-``z_timer_init_topic`` form creates a timer-owned immutable zero-payload
-Message for the supplied topic and requires no Message pool.
+``z_timer_init_payload`` copies the supplied payload into one Timer-owned
+dynamic Message and retains its base claim for the Timer's initialized
+lifetime, including while stopped or expired. The Timer retains an additional
+claim for each pending dynamic delivery. The ``z_timer_init_topic`` form
+creates a Timer-owned immutable zero-payload Message for the supplied topic and
+requires no Message pool.
 
 Stopping an already disarmed Timer returns ``Z_NOT_RUNNING``. Timer expiration
 posts a Message and does not invoke application handlers from tick context.
 Timers expiring on the same tick are posted in arm order. Tick arithmetic is
 unsigned and modular; zero delay expires on the next tick, and delays and
 periods are limited to the configured less-than-half-range maximum.
-``z_timer_cancel`` stops the Timer and removes its pending timer Messages; it
-returns ``Z_NOT_RUNNING`` when the Timer is neither armed nor pending.
+``z_timer_cancel`` stops the Timer and removes its pending private Message
+deliveries; it releases a retained dynamic base claim and returns
+``Z_NOT_RUNNING`` when the Timer is neither armed nor pending and has no
+retained base claim. A canceled Timer must be initialized again before it can
+be armed.
 <<<
 RELATIONS:
 - TYPE: Parent

@@ -17,8 +17,11 @@ IMPLEMENTATION: selected solution and code link
 `requirements.sdoc` is the single StrictDoc root. `what-requirements.sdoc`,
 `api-requirements.sdoc`, and `implementation-work.sdoc` are non-root documents
 linked with `Parent` relations. `File` relations point to readable contract
-documents. IMPLEMENTATION comments carry planned code links until those source
-files exist; they become `File` relations when the code is added.
+documents. IMPLEMENTATION records carry `File` relations for source-backed
+decisions; deferred targets remain explicitly documented without a source link.
+TEST work items form a verification layer below the applicable WHAT or
+INTERFACE records and carry both upstream `Parent` relations and source-test
+`File` relations.
 
 ## Migration of the previous baseline
 
@@ -54,18 +57,23 @@ layer prefix and does not reuse the old mixed-level identifiers.
 
 The graph was reviewed after the split:
 
-- 14 WHY items have downstream WHAT coverage.
-- 28 WHAT items have at least one INTERFACE child.
+- 15 WHY items have downstream WHAT coverage.
+- 29 WHAT items have at least one INTERFACE child.
 - 18 INTERFACE items have at least one IMPLEMENTATION child.
+- 20 IMPLEMENTATION items are recorded; 18 have source File relations and 2
+  remain explicitly deferred.
+- 13 TEST items each have upstream Parent relations, a source-test File
+  relation, and a matching `@relation(ZEF-TEST-..., scope=...)` marker.
 - Every non-root item has a `Parent` relation.
-- Every IMPLEMENTATION item has an explicit planned code link in its comment;
-  those links are promoted to `File` relations when implementation files exist.
+- Every source-backed IMPLEMENTATION item has a resolved File relation.
 - INTERFACE statements may repeat caller-visible preconditions and exposure
   rules; WHAT remains the formal behavioral contract.
 - No WHY statement defines an API, algorithm, data structure, or system
   boundary.
-- Optional Cortex-M0 preemption remains explicitly downstream and does not
-  silently expand the host-only Phase 1 boundary.
+- Generic cooperative core and host-Port acceptance precede target work.
+- Cortex-M0/M0+ critical sections, PendSV, startup, and target panic handling
+  remain explicitly deferred to Phase 3 and do not silently expand the host
+  baseline.
 
 ## Ongoing rules
 

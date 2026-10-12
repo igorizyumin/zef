@@ -1,8 +1,8 @@
 [DOCUMENT]
 TITLE: ZEF IMPLEMENTATION — selected solution and code work
 UID: ZEF-IMPLEMENTATION-DOC
-VERSION: 1.0.0
-DATE: 2026-10-10
+VERSION: 1.1.0
+DATE: 2026-10-11
 PREFIX: ZEF-IMP
 ROOT: False
 OPTIONS:
@@ -11,9 +11,12 @@ OPTIONS:
 
 [TEXT]
 STATEMENT: >>>
-IMPLEMENTATION items choose the concrete solution. The remaining work is to
-write and verify the code at the linked paths. Each item has an INTERFACE parent
-and a planned code link; a missing code file means planned, not unlinked.
+IMPLEMENTATION items record concrete mechanisms present in the current source
+tree. The statements describe the code as written, including deliberately
+unfinished target ports and the current verification boundary. Code references
+are recorded as File relations and, where useful, repeated in comments for
+readability. These records are descriptive implementation notes rather than
+additional behavioral requirements.
 <<<
 
 [[SECTION]]
@@ -21,32 +24,93 @@ TITLE: Build, configuration, and common failure handling
 
 [REQUIREMENT]
 UID: ZEF-IMP-001
-TITLE: Configuration header and assertions
-STATEMENT: Add the compile-time configuration header, exact-width public types, range checks, layout checks, and configuration-test fixtures.
-COMMENT: Code link: framework/include/zef_config.h; tests/configuration/.
+TITLE: Configuration defaults and compile-time guards
+STATEMENT: >>>
+``include/zef_config.h`` supplies defaults for reactor slots, topic count,
+message-pool count, state depth, mailbox capacity, tick type, pool alignment,
+assertion mode, and claim-counter type. Preprocessor checks constrain the
+configured ranges for the main limits. Static assertions check the alignment
+and the selected integer widths. ``ZefMaxAlign`` provides the maximum scalar
+alignment used by the default pool alignment expression on the supported host
+compilers.
+<<<
+COMMENT: Code references: include/zef_config.h; include/zef.h.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-004
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef_config.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
 
 [REQUIREMENT]
 UID: ZEF-IMP-002
-TITLE: Opaque public object headers
-STATEMENT: Use forward-declared opaque runtime types and caller-owned storage handles in the public headers.
-COMMENT: Code link: framework/include/zef_types.h; framework/include/zef_api.h.
+TITLE: Complete public runtime structures
+STATEMENT: >>>
+``include/zef.h`` exposes complete definitions for the pool, Message, Mailbox,
+Machine, Reactor, Kernel, TopicTable, Clock, Timer, and Port structures. The
+framework marks its internal members as reserved in comments rather than using
+opaque handles. Caller-owned storage appears directly in the public structures
+and in the Mailbox slot-array arguments.
+<<<
+COMMENT: Code reference: include/zef.h. The implementation uses one public umbrella header rather than separate opaque type and API headers.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-001
 - TYPE: Parent
   VALUE: ZEF-IF-003
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
 
 [REQUIREMENT]
 UID: ZEF-IMP-003
-TITLE: Panic and result implementation
-STATEMENT: Implement the result enums, panic reasons, diagnostic payload, non-returning panic adapter, and host capture hook.
-COMMENT: Code link: framework/core/zef_panic.c; framework/include/zef_panic.h; tests/panic/.
+TITLE: Panic boundary and ordinary results
+STATEMENT: >>>
+``ZResult``, ``ZPanicReason``, and ``ZPanicInfo`` are declared in
+``include/zef.h``. Internal ``zef_fail`` builds a diagnostic record and calls
+the externally supplied non-returning ``z_panic`` function. The library does
+not provide a default panic implementation; the host smoke test supplies an
+aborting handler. Expected empty, not-running, and not-found observations use
+``ZResult`` while invalid arguments, lifecycle violations, ownership failures,
+resource exhaustion, and state errors route through the panic boundary.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_message.c; tests/zef_smoke_test.c.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-002
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_message.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_smoke_test.c
+
+[REQUIREMENT]
+UID: ZEF-IMP-004
+TITLE: Host build and smoke-test target
+STATEMENT: >>>
+The root ``CMakeLists.txt`` builds a static ``zef`` library from five C11 source
+files, exports ``include`` as its public include directory, enables warning
+options, and registers one CTest executable named ``zef_smoke_test``. The
+current build contains Debug and Release host configurations; no separate
+configuration-fixture target appears in the repository.
+<<<
+COMMENT: Code references: CMakeLists.txt; tests/zef_smoke_test.c.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-050
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: CMakeLists.txt
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_smoke_test.c
 
 [[/SECTION]]
 
@@ -55,52 +119,172 @@ TITLE: Message, Mailbox, and Machine implementation
 
 [REQUIREMENT]
 UID: ZEF-IMP-010
-TITLE: Fixed message pools and envelope
-STATEMENT: Use fixed aligned block pools with a bounded free-list, an opaque envelope, a building/sealed state bit, a topic, exact payload length, and an internal claim counter.
-COMMENT: Code link: framework/core/zef_pool.c; framework/core/zef_message.c; framework/include/zef_message.h.
+TITLE: Fixed message pools and embedded envelope
+STATEMENT: >>>
+``src/zef_message.c`` initializes caller-provided aligned block storage as a
+free list. Allocation selects the smallest initialized pool whose block size
+contains ``sizeof(ZMsg) + payload_size``; equal sizes retain array order.
+The allocated block begins with a complete ``ZMsg`` and places the
+payload immediately after it. ``z_message_begin`` creates a dynamic Message
+with one creator reference. ``z_message_static_init`` represents an immutable
+caller-owned Message without a pool block.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_message.c.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-010
 - TYPE: Parent
   VALUE: ZEF-IF-012
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_message.c
 
 [REQUIREMENT]
 UID: ZEF-IMP-011
-TITLE: Claim transfer and reclamation
-STATEMENT: Implement normal post as claim transfer, shared post as retain-before-enqueue, dequeue transfer, publication claim accounting, checked release, and immediate final-release return to the originating pool.
-COMMENT: Code link: framework/core/zef_message.c; tests/message_ownership/.
+TITLE: Message lifecycle and claim accounting
+STATEMENT: >>>
+Dynamic Messages begin with one creator reference. A consuming Mailbox post or
+topic publication transfers that reference to the framework and nulls the
+sender pointer. Retain increments the reference counter, release decrements it, and the final release returns the block
+to its originating pool. Static Messages bypass claim changes and pool
+reclamation. Checked mutable and read-only accessors verify the lifecycle and,
+for typed access, the exact payload size.
+<<<
+COMMENT: Code references: src/zef_message.c; src/zef_mailbox.c; src/zef_kernel.c.
 RELATIONS:
 - TYPE: Parent
+  VALUE: ZEF-IF-010
+- TYPE: Parent
   VALUE: ZEF-IF-011
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_message.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_mailbox.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_kernel.c
 
 [REQUIREMENT]
 UID: ZEF-IMP-012
-TITLE: Ring Mailbox
-STATEMENT: Use a monotonic head/tail ring over caller-provided const Message pointers, with conditional wrap for arbitrary capacities, front insertion, statistics, and stable selective removal.
-COMMENT: Code link: framework/core/zef_mailbox.c; framework/include/zef_mailbox.h.
+TITLE: Monotonic ring Mailbox
+STATEMENT: >>>
+``src/zef_mailbox.c`` stores caller-provided Message-pointer slots behind
+monotonic ``head`` and ``tail`` counters. Normal posts consume a dynamic
+Message, front posts decrement the head, and postpone retains an existing
+Message before enqueueing it. Take transfers the queued reference to the
+caller. Occupancy, free-space, minimum-free-space, and predicate-based stable
+removal operate directly on the bounded ring without general-purpose
+allocation.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_mailbox.c.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-013
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_mailbox.c
+
+[REQUIREMENT]
+UID: ZEF-IMP-013
+TITLE: Timer-private messages and mailbox layout
+STATEMENT: >>>
+Each public ``ZMailbox`` stores only its configured Message pointer slots.
+Timers create or embed a private Message and enqueue that same Message for
+each expiration. Cancellation removes matching private Message pointers using
+the bounded mailbox removal operation, so no per-slot timer owner metadata or
+dynamic allocation is required.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_mailbox.c; src/zef_timer.c.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-013
+- TYPE: Parent
+  VALUE: ZEF-IF-032
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_mailbox.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_timer.c
 
 [REQUIREMENT]
 UID: ZEF-IMP-020
 TITLE: Descriptor-based Machine
-STATEMENT: Represent each State node with immutable parent, initial, handler, enter, and leave fields; keep only the current node and startup state in the Machine; use bounded local traversal storage for transitions.
-COMMENT: Code link: framework/core/zef_machine.c; framework/include/zef_machine.h.
+STATEMENT: >>>
+State descriptors remain caller-owned ``ZStateNode`` objects containing parent,
+initial, handler, enter, and leave links. ``ZMachine`` stores the root, current
+node, application context, and lifecycle flags. Dispatch walks parent links
+until a handler handles the Message or requests a transition. Transition code
+uses fixed-size local path arrays bounded by ``Z_MAX_STATE_DEPTH`` and invokes
+leave hooks from the source toward the common ancestor, then enter hooks toward
+the target.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_machine.c.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-020
 - TYPE: Parent
   VALUE: ZEF-IF-021
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_machine.c
+
+[REQUIREMENT]
+UID: ZEF-IMP-021
+TITLE: Bounded state-graph validation
+STATEMENT: >>>
+Machine initialization checks the non-null root, root-parent relationship,
+parent cycles, every declared child and sibling link, initial-child membership,
+and the depth of every reachable parent chain. Runtime transition validation
+checks that a target reaches the configured root within the depth limit.
+Startup and dispatch track explicit lifecycle flags; startup enters the root
+and follows initial links, while a self-transition leaves and re-enters the
+current node before following its initial links.
+<<<
+COMMENT: Code reference: src/zef_machine.c.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-020
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_machine.c
 
 [REQUIREMENT]
 UID: ZEF-IMP-030
-TITLE: Reactor registry and cleanup
-STATEMENT: Implement a zero-based registry with explicit lifecycle state, mailbox cleanup, runnable-bit cleanup, timer detach, subscription removal, and detectable repeated removal.
-COMMENT: Code link: framework/core/zef_reactor.c; framework/include/zef_reactor.h.
+TITLE: Permanent Reactor registry and lifecycle
+STATEMENT: >>>
+``src/zef_kernel.c`` assigns each initialized Reactor an explicit zero-based
+slot in the Kernel registry. The slot is also the Reactor's strict priority;
+the high-water registry bound allows temporary gaps. Registration attaches the
+Reactor Mailbox to the Kernel, and start marks the Reactor active and starts
+its primary Machine. Registered Reactors remain in the registry for the Kernel
+lifetime. The source tree contains no Reactor stop, removal, cleanup, or
+terminated-stack path.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_kernel.c.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-022
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_kernel.c
 
 [[/SECTION]]
 
@@ -109,30 +293,96 @@ TITLE: Kernel, topics, and time
 
 [REQUIREMENT]
 UID: ZEF-IMP-040
-TITLE: Cooperative Kernel bitmap
-STATEMENT: Use one runnable bitmap indexed by zero-based Reactor identity, highest-set-bit selection, one-message run_one dispatch, and an idle callback in run_forever.
-COMMENT: Code link: framework/core/zef_kernel.c; framework/include/zef_kernel.h.
+TITLE: Cooperative Kernel runnable bitmap
+STATEMENT: >>>
+The Kernel stores one 32-bit runnable bitmap indexed by explicit zero-based
+Reactor identity. Reactor identity is also strict priority, with larger
+identities running first; unregistered identities may be gaps. Mailbox changes
+set or clear a Reactor bit when its primary Reactor is started.
+``z_kernel_run_one`` scans runnable identities from high to low, takes one
+Message, dispatches the primary Machine, releases the dispatch claim, and
+refreshes the bit.
+``z_kernel_run_forever`` calls the Port idle callback after a no-work result.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_kernel.c.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-030
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_kernel.c
 
 [REQUIREMENT]
 UID: ZEF-IMP-050
-TITLE: Bitmap topic table
-STATEMENT: Use one subscriber bitmap per topic, snapshot it inside the port critical section, and deliver the shared sealed Message in priority order.
-COMMENT: Code link: framework/core/zef_topics.c; framework/include/zef_topics.h.
+TITLE: Bitmap topic table and ordered publication
+STATEMENT: >>>
+``ZTopicTable`` stores one 32-bit subscriber bitmap per configured topic and a
+pointer to its Kernel. Subscription changes and publication snapshots enter
+and leave the Port critical section. Publication consumes the sender pointer,
+snapshots subscribers, then scans Reactor identities from high to low and
+enqueues the same Message in strict priority order while retaining references
+for later recipients. The dense case uses the high-water identity bound
+and does not allocate or sort a recipient list; unregistered identity gaps are
+skipped by the bitmap.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_kernel.c.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-031
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_kernel.c
 
 [REQUIREMENT]
 UID: ZEF-IMP-060
-TITLE: Delta-list Clock service
-STATEMENT: Use a caller-owned delta list, explicit timer state, immediate unlink on stop, enqueue-only expiry handling, periodic reinsertion, and a documented same-tick rule.
-COMMENT: Code link: framework/core/zef_clock.c; framework/include/zef_clock.h.
+TITLE: Linked-list Clock service
+STATEMENT: >>>
+The Clock keeps a caller-owned linked list with head and tail pointers rather
+than a delta list. Arming appends a Timer and stores an absolute modular due
+tick. Each clock tick advances the counter and scans the list for timers whose
+due tick equals the current tick. Periodic timers are unlinked and appended at
+their next due tick, preserving list order for same-tick expiry. Expiry only
+enqueues a Message; it does not invoke application handlers.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_timer.c.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-032
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_timer.c
+
+[REQUIREMENT]
+UID: ZEF-IMP-061
+TITLE: Timer-owned messages and base claims
+STATEMENT: >>>
+Payload timer initialization allocates and copies one private dynamic Message
+for the Timer. Expiry retains one claim per queued delivery, while the Timer
+keeps its base claim until terminal cancellation. Stopping or one-shot expiry
+leaves the base claim in place so the Timer can be armed again. Cancellation
+unlinks the Timer, removes matching private Message entries, and releases the
+retained base claim. Topic timers use an embedded zero-payload static Message
+and do not use pool claims.
+<<<
+COMMENT: Code references: src/zef_timer.c; src/zef_mailbox.c.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-032
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_timer.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_mailbox.c
 
 [[/SECTION]]
 
@@ -141,47 +391,107 @@ TITLE: Ports, optional preemption, and verification
 
 [REQUIREMENT]
 UID: ZEF-IMP-070
-TITLE: Host port
-STATEMENT: Implement saved-state fake interrupt masking, nested restoration, reschedule observation, idle observation, and non-returning panic capture for host tests.
-COMMENT: Code link: framework/ports/host/zef_port_host.c; tests/port_host/.
+TITLE: Port callback boundary
+STATEMENT: >>>
+``ZPort`` is a public callback structure containing critical-section entry and
+leave, reschedule request, and idle operations. Kernel and TopicTable code use
+the critical callbacks when a Port is available. The current host test defines
+no-op callbacks directly in ``tests/zef_smoke_test.c``; there is no standalone
+host-port source file.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_kernel.c; tests/zef_smoke_test.c.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-040
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_kernel.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_smoke_test.c
+
+[REQUIREMENT]
+UID: ZEF-IMP-071
+TITLE: Cortex-M0 port status
+STATEMENT: >>>
+No Cortex-M0 critical-section, PendSV, low-power idle, or target panic source
+appears in the current tree. Cortex-M0/M0+ support is explicitly deferred to
+Phase 3, after the generic cooperative core and host-port acceptance. The
+public ``ZPort`` callback shape is the target-neutral boundary for that later
+port; the current phase makes no target-support claim.
+<<<
+COMMENT: No code reference is present for this deferred target port.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-040
 
 [REQUIREMENT]
-UID: ZEF-IMP-071
-TITLE: Cortex-M0 port
-STATEMENT: Map critical sections to PRIMASK, rescheduling to PendSV request, idle to the target low-power hook, and panic to the target safe-state policy; document kernel-aware interrupts.
-COMMENT: Code link: framework/ports/cortex-m0/zef_port_cortex_m0.c; framework/ports/cortex-m0/zef_pendsv.S.
+UID: ZEF-IMP-072
+TITLE: Optional preemptive scheduler status
+STATEMENT: >>>
+No per-Reactor process stacks, exception-frame setup, callee-saved register
+switching, or preemptive Reactor removal code appears in the current tree. The
+implemented scheduler is cooperative and run-to-completion.
+<<<
+COMMENT: No code reference is present for this deferred scheduler.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-040
 
 [REQUIREMENT]
 UID: ZEF-IMP-073
-TITLE: Public API interrupt-context annotations
-STATEMENT: Add an explicit ISR-safe, thread-only, or ISR-variant classification to every application-callable public API function and macro, including stated preconditions, boundedness limits, ownership rules, and fatal-error behavior; add ISR-specific operations where the classification requires them.
-COMMENT: Code link: public headers and API documentation; ISR-context consumer tests.
+TITLE: Interrupt-context classification status
+STATEMENT: >>>
+The public API is exposed in ``include/zef.h`` and its interrupt-context
+classification is described in ``docs/api-requirements.sdoc``. The current C
+headers contain no compiler annotations or separately named ISR variants; the
+implementation relies on the bounded fixed-storage code paths and the
+documented caller context.
+<<<
+COMMENT: Code and documentation references: include/zef.h; docs/api-requirements.sdoc.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-041
-
-[REQUIREMENT]
-UID: ZEF-IMP-072
-TITLE: Optional PendSV scheduler
-STATEMENT: Implement per-Reactor process stacks, valid exception frames, callee-saved register save and restore, highest-eligible-runnable selection, and safe removal of a terminated Reactor.
-COMMENT: Code link: framework/ports/cortex-m0/zef_pendsv.S; framework/ports/cortex-m0/zef_context.c.
-RELATIONS:
-- TYPE: Parent
-  VALUE: ZEF-IF-040
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: docs/api-requirements.sdoc
 
 [REQUIREMENT]
 UID: ZEF-IMP-080
-TITLE: Consumer and behavior test matrix
-STATEMENT: Add public-header consumer tests, unit tests, property tests, integration tests, configuration variants, and sanitizer builds covering each WHAT and INTERFACE item before phase exit.
-COMMENT: Code link: tests/; CMake test targets; source relation markers in implementation and test files.
+TITLE: Current consumer and behavior tests
+STATEMENT: >>>
+``tests/zef_smoke_test.c`` and ``tests/zef_test_work.c`` include the public
+header and link the built library. The smoke executable covers the compact
+end-to-end path. The traceable test-work executable covers public compilation,
+pool selection, typed access, claims, panic reasons and preserved failure
+state, Mailbox ordering and wraparound, hierarchical Machine transitions,
+Reactor startup and cooperative scheduling, topic publication and
+zero-recipient reclamation, Timer delivery and ownership, cancellation, and
+Port callback paths. The CMake test targets run both executables in the
+available host configurations. Configuration-variant, property, and sanitizer
+matrices remain outside the current host test target.
+<<<
+COMMENT: Code references: CMakeLists.txt; tests/zef_smoke_test.c; tests/zef_test_work.c; docs/test-work.sdoc.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-050
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: CMakeLists.txt
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_smoke_test.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: docs/test-work.sdoc
 
 [[/SECTION]]
