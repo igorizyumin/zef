@@ -12,12 +12,13 @@ extern "C" {
 #endif
 
 /** @file
- *  @brief Public API for the ZEF actor, state-machine, and messaging runtime.
+ *  @brief Public API for the Z Event Framework (ZEF) actor, state-machine, and messaging runtime.
  *
- *  ZEF provides fixed-memory messages, bounded mailboxes, hierarchical state
- *  machines, strict-priority reactors, topics, and tick-driven timers. Unless
- *  otherwise noted, invalid arguments and lifecycle violations are reported
- *  through the application's @ref z_panic hook.
+ *  The Z Event Framework (ZEF) provides fixed-memory messages, bounded
+ *  mailboxes, hierarchical state machines, strict-priority reactors, topics,
+ *  and tick-driven timers. Unless otherwise noted, invalid arguments and
+ *  lifecycle violations are reported through the application's @ref z_panic
+ *  hook.
  */
 
 /** @defgroup zef_macros Configuration parameters

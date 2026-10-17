@@ -1,4 +1,4 @@
-# ZEF Phase 1 specification
+# Z Event Framework (ZEF) Phase 1 specification
 
 Status: baseline for review, version 0.2.0, 2026-10-10.
 

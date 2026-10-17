@@ -1,7 +1,8 @@
-# ZEF: actors and hierarchical state machines
+# Actors and hierarchical state machines
 
-ZEF is a small C runtime for building event-driven applications on embedded
-systems and other resource-constrained targets. It combines:
+ZEF, short for **Z Event Framework**, is a small C runtime for building
+event-driven applications on embedded systems and other resource-constrained
+targets. It combines:
 
 - actors with bounded mailboxes;
 - hierarchical state machines for describing behavior;

@@ -1,5 +1,5 @@
-# Doxygen configuration for the public ZEF API.
-PROJECT_NAME           = ZEF
+# Doxygen configuration for the public Z Event Framework (ZEF) API.
+PROJECT_NAME           = "Z Event Framework (ZEF)"
 PROJECT_NUMBER         = 0.1.0
 PROJECT_BRIEF          = "Fixed-memory actor and state-machine runtime"
 

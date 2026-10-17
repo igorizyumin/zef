@@ -1,7 +1,7 @@
-# ZEF requirements and design
+# Z Event Framework (ZEF) requirements and design
 
-Start with the [ZEF introduction and user guide](introduction.md) for an
-overview of the actor model, hierarchical state machines, and practical
+Start with the [Z Event Framework (ZEF) introduction and user guide](introduction.md)
+for an overview of the actor model, hierarchical state machines, and practical
 state-machine examples.
 
 The requirements are organized as a recursive four-layer work-item graph:
