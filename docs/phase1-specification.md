@@ -41,6 +41,10 @@ void *z_message_begin(ZMessagePoolSet *pool_set,
                       ZTopic topic,
                       size_t payload_size,
                        ZMsg **message);
+void z_message_factory_init(ZMessagePoolSet *pool_set);
+void *z_message_begin_default(ZTopic topic,
+                              size_t payload_size,
+                              ZMsg **message);
 void *z_message_payload_mut(ZMsg *message);
 void *z_message_payload_mut_checked(ZMsg *message,
                                     size_t expected_size);
@@ -49,6 +53,8 @@ void z_message_release(ZMsg const *message);
 void z_mailbox_post(ZMailbox *mailbox, ZMsg **message);  /* transfer + null */
 void z_mailbox_postpone(ZMailbox *mailbox,
                         ZMsg const *message);             /* retain + defer */
+ZResult z_mailbox_recall(ZMailbox *destination,
+                         ZMailbox *source);              /* newest + front */
 ```
 
 The typed construction macro is the normal entry point for application code.
@@ -58,6 +64,8 @@ size is known when the pool is selected:
 ```c
 #define Z_MSG_BEGIN(pool_set_, topic_, Type_, msg_) \
     ((Type_ *)z_message_begin((pool_set_), (topic_), sizeof(Type_), (msg_)))
+#define Z_MSG_NEW(topic_, Type_, msg_) \
+    ((Type_ *)z_message_begin_default((topic_), sizeof(Type_), (msg_)))
 
 ```
 
@@ -67,6 +75,14 @@ pools are considered in caller-supplied order. It returns the non-null mutable
 payload pointer directly, so the caller does not need a separate untyped
 payload lookup during construction.
 
+For applications with one process-wide pool set, `z_message_factory_init` can
+configure the default message factory once. `Z_MSG_NEW(topic, Type, msg)` then
+provides the same typed construction behavior without carrying a pool-set
+pointer through every producer. The explicit `Z_MSG_BEGIN` form remains
+available when a caller needs to select a particular pool set, including tests
+and applications with multiple independent sets. Using `Z_MSG_NEW` before the
+factory is initialized is a lifecycle panic.
+
 The fixed-pool construction functions are bounded and ISR-safe in Phase 1;
 they do not use a general-purpose allocator. This is a contract sketch, not an implementation prescription. The final
 headers may choose names or types that better fit C portability, provided the
@@ -75,7 +91,9 @@ observable rules remain the same:
 1. `begin` creates one creator claim and writable building storage.
 2. `post`, `post_front`, and publication consume the caller's `ZMsg *` and
    leave it null before enqueueing or taking the subscriber snapshot.
-3. A successful normal post transfers the creator reference to the framework.
+3. A successful normal post transfers a dynamic creator reference to the
+   framework; static Messages have no claim to transfer but are accepted and
+   the caller's construction pointer is still consumed.
 4. A successful `postpone` adds a mailbox claim and preserves the caller's
    claim.
 5. A fatal enqueue does not return and must not assert a claim or alter the
@@ -95,13 +113,18 @@ the enumerated expected observations, including an empty mailbox or stopping an
 already stopped timer.
 
 Typed payload access for delivered Messages uses `Z_MSG_PAYLOAD(message, Type)`.
-Initial construction uses `Z_MSG_BEGIN(pool_set, topic, Type, msg)`, which passes
-`sizeof(Type)` to `z_message_begin` and returns a typed mutable payload pointer.
+Initial construction uses `Z_MSG_BEGIN(pool_set, topic, Type, msg)` or, after
+default factory initialization, `Z_MSG_NEW(topic, Type, msg)`. Both pass
+`sizeof(Type)` to the message allocator and return a typed mutable payload pointer.
 The allocator uses that size, including the message envelope, to select the
 smallest available pool block. The macro and checked accessor compare the payload
 length with the requested type size, invoke the panic handler on mismatch, and
 never return a null pointer. Payloads that need more data require a separate
 message type or an application-owned external buffer.
+
+For immutable notifications with no payload, `Z_MSG_STATIC(name, topic)`
+declares a function-local or file-scope static constant `ZMsg` ready for
+posting or postponement. It requires no pool and has no ownership claim.
 
 `Z_MSG_PAYLOAD_MUT(msg, Type)` remains available for checked mutable
 re-access during construction, but it is not needed for the initial lookup:
@@ -237,6 +260,39 @@ void reactor_handle(void *context, ZMsg const *message)
 
 Dispatch before startup or repeated startup is a fatal lifecycle violation.
 
+### Actor convenience composition
+
+`ZActor` is the convenience form for the common one-machine, one-mailbox,
+one-reactor arrangement. It owns the three embedded framework objects but uses
+caller-owned state descriptors, application context, and mailbox slot storage:
+
+```c
+void z_actor_init(ZActor *actor,
+                  ZStateNode const *root,
+                  void *context,
+                  ZMsg const **mailbox_slots,
+                  uint16_t mailbox_capacity);
+ZReactorId z_actor_register(ZKernel *kernel, ZActor *actor, ZReactorId id);
+void z_actor_start(ZKernel *kernel, ZActor *actor);
+#define Z_MSG_POST(actor_, msg_) \
+    do { \
+        ZMsg *zef_post_message_ = (ZMsg *)(msg_); \
+        z_mailbox_post(&(actor_)->mailbox, &zef_post_message_); \
+        (msg_) = zef_post_message_; \
+    } while (0)
+```
+
+Actor registration and startup are convenience forwards to the embedded
+Reactor. The embedded Mailbox remains the normal message-posting interface,
+and an Actor has the same identity, priority, ownership, and lifecycle rules
+as a manually composed Reactor. `Z_MSG_POST(actor, msg)` is the convenience
+form for posting to an Actor and transfers-and-nulls a variable pointing to
+either a dynamic or static Message; static Messages carry no claim. Direct
+Mailbox posting remains available for standalone or non-Actor destinations.
+`Z_MSG_POST` is ISR-safe because it delegates to the bounded,
+critical-section-protected `z_mailbox_post` operation; there is no separate
+Actor-specific ISR posting API.
+
 ### Local deferred Mailboxes
 
 Every `ZMailbox` is caller-owned and may either be configured as a Reactor's
@@ -274,7 +330,10 @@ queue share the Message storage, and the payload is not copied. The same
 `z_mailbox_take` transfers a dynamic queue claim to the application, which
 releases it after processing; taking a static entry transfers no claim. A local
 queue is therefore a bounded deferral mechanism, not another scheduler
-endpoint.
+endpoint. `z_mailbox_recall` is the complementary one-entry operation for
+state entry actions: it transfers the newest entry from an unassigned deferred
+mailbox to the front of the actor mailbox, preserving the deferred mailbox's
+LIFO order.
 
 ## Cooperative Kernel contract
 
@@ -302,12 +361,21 @@ typedef uint32_t ZCriticalState;
 
 ZCriticalState z_port_critical_enter(void);
 void z_port_critical_leave(ZCriticalState state);
-void z_port_request_reschedule(void);
-void z_port_idle(void);
+
+struct ZPort {
+    void (*request_reschedule)(void);
+    void (*idle)(void);
+};
 ```
 
 `critical_enter` returns the prior interrupt state. `critical_leave` restores
-that state, which makes nesting composable. Fatal conditions such as mailbox
+that state, which makes nesting composable. Critical entry and leave are global
+processor-port operations; they are not looked up through a ``ZKernel`` or a
+``ZMailbox``. The `ZPort` callback table supplied to `z_kernel_init` contains
+only Kernel-owned scheduling hooks for reschedule and idle behavior.
+The framework uses the global critical operations around scheduler, mailbox,
+message-claim, and fixed-pool free-list mutations, including for unregistered
+Mailboxes. Fatal conditions such as mailbox
 overflow, pool exhaustion, invalid arguments, ownership violations, and
 invalid state transitions invoke the application-supplied `z_panic` function
 and do not return. The application provides this non-returning function; it is
@@ -323,7 +391,8 @@ Phase 1 is complete when this requirements graph, this contract, the host
 example, and the traceability workflow are reviewed. Phase 2 implements and
 accepts the generic cooperative core and host Port. Cortex-M0/M0+ critical
 sections, PendSV, and target startup remain explicitly deferred to Phase 3;
-the host contract does not claim target support.
+the selected Phase 3 model is shared-stack activation on MSP, not one process
+stack per Reactor, and the host contract does not claim target support.
 
 ## Resolved contract decisions
 

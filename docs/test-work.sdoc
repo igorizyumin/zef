@@ -236,6 +236,49 @@ RELATIONS:
   FORMAT: Sourcecode
   PATH: tests/zef_test_work.c
 
+[REQUIREMENT]
+UID: ZEF-TEST-034
+TITLE: Shared-stack priority gate
+STATEMENT: >>>
+Run a low-priority Reactor whose handler posts to a higher-priority Reactor
+and verify that the Port receives a preemption request. Then run the
+higher-priority Reactor whose handler posts to a lower-priority Reactor and
+verify that the lower-priority delivery remains ready without requesting a
+preemption. The fixture verifies that the portable scheduler gate uses strict
+priority while preserving one-message run-to-completion dispatch. Compile the
+same fixture with the default cooperative configuration and with
+``ZEF_EXECUTION_PREEMPTIVE`` to verify that the configuration is accepted by
+the public header and the target Port selects the corresponding activation
+boundary.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-071
+- TYPE: Parent
+  VALUE: ZEF-IF-042
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
+[REQUIREMENT]
+UID: ZEF-TEST-035
+TITLE: Actor convenience composition
+STATEMENT: >>>
+Initialize one ``ZActor`` from a state root, application context, and
+caller-owned Mailbox slots. Verify that its embedded Machine, Mailbox, and
+Reactor are wired together, that registration and start use the existing
+Reactor lifecycle, and that a Message posted to the embedded Mailbox reaches
+the embedded Machine through ordinary Kernel dispatch.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-034
+- TYPE: Parent
+  VALUE: ZEF-IF-023
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
+
 [[/SECTION]]
 
 [[SECTION]]
@@ -285,7 +328,7 @@ Exercise the host Port fixture's nested critical-state restoration,
 reschedule notification from runnable Mailbox changes, and topic operations
 through the public Port callback structure. The fixture records entry and leave
 counts, verifies nested state restoration, and observes reschedule requests
-from startup, subscription changes, and queued work. A second kernel with all
+when startup reveals queued work and when queued work arrives. A second kernel with all
 Port callbacks null verifies the optional callback paths remain usable.
 <<<
 RELATIONS:

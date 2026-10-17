@@ -5,21 +5,50 @@ project(zef VERSION 0.1.0 LANGUAGES C)
 include(CTest)
 
 option(ZEF_ENABLE_COVERAGE "Build LLVM source-based coverage instrumentation" OFF)
+option(ZEF_ENABLE_ASSERTIONS "Enable ZEF_REQUIRE precondition checks" ON)
+option(ZEF_BUILD_ARM_CM0P_PORT "Build the Cortex-M0+ shared-stack Port" OFF)
+option(ZEF_BUILD_NUCLEO_L073RZ_EXAMPLE
+       "Build the bare-metal Nucleo-L073RZ framework example" OFF)
 
 if (ZEF_ENABLE_COVERAGE AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "ZEF_ENABLE_COVERAGE requires a Clang compiler")
 endif()
 
 add_library(zef
+    src/zef_actor.c
     src/zef_kernel.c
     src/zef_machine.c
     src/zef_mailbox.c
     src/zef_message.c
+    src/zef_port.c
     src/zef_timer.c
 )
 
 target_compile_features(zef PUBLIC c_std_11)
 target_include_directories(zef PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(zef PUBLIC
+    ZEF_ENABLE_ASSERTIONS=$<BOOL:${ZEF_ENABLE_ASSERTIONS}>
+)
+
+if (ZEF_BUILD_ARM_CM0P_PORT)
+    add_library(zef_arm_cm0p_port STATIC
+        ports/arm-cm0p/zef_arm_cm0p_port.c
+    )
+    target_include_directories(zef_arm_cm0p_port
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(zef_arm_cm0p_port PUBLIC zef)
+    target_compile_features(zef_arm_cm0p_port PUBLIC c_std_11)
+endif()
+
+if (ZEF_BUILD_NUCLEO_L073RZ_EXAMPLE)
+    if (NOT ZEF_BUILD_ARM_CM0P_PORT)
+        message(FATAL_ERROR
+            "ZEF_BUILD_NUCLEO_L073RZ_EXAMPLE requires ZEF_BUILD_ARM_CM0P_PORT=ON")
+    endif()
+    add_subdirectory(examples/nucleo-l073rz)
+endif()
 
 if (MSVC)
     target_compile_options(zef PRIVATE /W4)

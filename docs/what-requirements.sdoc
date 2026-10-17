@@ -250,6 +250,26 @@ RELATIONS:
 [[/SECTION]]
 
 [[SECTION]]
+TITLE: Actor composition
+
+[REQUIREMENT]
+UID: ZEF-WHAT-034
+TITLE: Actor convenience composition
+STATEMENT: >>>
+The framework shall provide a ``ZActor`` convenience object that composes one
+primary Machine, one bounded Mailbox, and one Reactor. Actor initialization
+shall bind caller-provided state-root, context, and Mailbox slot storage to
+the embedded objects. Actor registration and start shall use the existing
+Reactor identity, priority, and lifecycle rules; an Actor shall not create a
+second scheduling model or hide Mailbox ownership.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHY-013
+
+[[/SECTION]]
+
+[[SECTION]]
 TITLE: Reactors, Mailboxes, and Kernel
 
 [REQUIREMENT]
@@ -437,16 +457,30 @@ RELATIONS:
 
 [REQUIREMENT]
 UID: ZEF-WHAT-071
-TITLE: Optional preemptive execution
+TITLE: Shared-stack preemptive execution
 STATEMENT: >>>
-A Cortex-M0 preemptive port, when included in a phase baseline,
-shall preserve the cooperative run-to-completion contract while allowing
-deferred priority-based context switching and shall define stack, interrupt,
-and safe termination behavior.
+A Cortex-M0 or Cortex-M0+ preemptive port, when included in a phase baseline,
+shall preserve the Reactor run-to-completion contract while allowing a ready
+higher-priority Reactor to preempt a lower-priority Reactor through bounded
+nested activation on one shared execution stack. The port shall not allocate a
+process stack per Reactor. It shall define the shared-stack bound, exception
+and interrupt priority rules, deferred rescheduling behavior, and safe return
+from or termination of an activation. It shall not provide arbitrary blocking
+thread semantics; handlers shall remain non-blocking and shall return before
+their lower-priority activation resumes.
+
+The build shall select the execution model through ``ZEF_EXECUTION_MODE`` in
+``zef_config.h``. ``ZEF_EXECUTION_COOPERATIVE`` shall be the default and shall
+preserve the cooperative scheduling contract. ``ZEF_EXECUTION_PREEMPTIVE``
+shall enable the target Port's shared-stack activation machinery; it shall be
+selected consistently for the complete target build and shall not be changed
+after Kernel startup.
 <<<
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-WHY-024
+- TYPE: Parent
+  VALUE: ZEF-WHY-025
 
 [[/SECTION]]
 
@@ -460,9 +494,9 @@ STATEMENT: >>>
 Host verification shall exercise the public headers and linked
 library, and shall cover ownership, pools, Mailboxes, Machines, topics, Clock
 service, cooperative scheduling, interrupt masking, idle behavior,
-and any preemptive scheduling model included in the host contract. Target-only
-preemptive context switching is outside host verification unless explicitly
-included in a phase baseline.
+and any portable shared-stack scheduling model included in the host contract.
+Target-only exception entry, nested activation, and context-return machinery
+are outside host verification unless explicitly included in a phase baseline.
 <<<
 RELATIONS:
 - TYPE: Parent

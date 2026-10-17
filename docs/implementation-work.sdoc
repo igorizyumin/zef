@@ -28,11 +28,17 @@ TITLE: Configuration defaults and compile-time guards
 STATEMENT: >>>
 ``include/zef_config.h`` supplies defaults for reactor slots, topic count,
 message-pool count, state depth, mailbox capacity, tick type, pool alignment,
-assertion mode, and claim-counter type. Preprocessor checks constrain the
-configured ranges for the main limits. Static assertions check the alignment
-and the selected integer widths. ``ZefMaxAlign`` provides the maximum scalar
-alignment used by the default pool alignment expression on the supported host
-compilers.
+assertion mode, claim-counter type, and execution model. ``ZEF_ENABLE_ASSERTIONS``
+defaults to enabled and controls only ``ZEF_REQUIRE`` precondition checks;
+direct ``ZEF_PANIC`` calls for runtime consistency and resource conditions
+remain active. The CMake option with the same name exposes this switch for
+complete builds. When disabled, invalid caller inputs are outside the API
+contract. Preprocessor checks constrain the configured ranges and execution-
+model values. Cooperative mode is the default; preemptive mode is a complete-
+build choice for a target Port.
+Static assertions check the alignment and the selected integer widths.
+``ZefMaxAlign`` provides the maximum scalar alignment used by the default pool
+alignment expression on the supported host compilers.
 <<<
 COMMENT: Code references: include/zef_config.h; include/zef.h.
 RELATIONS:
@@ -70,12 +76,14 @@ UID: ZEF-IMP-003
 TITLE: Panic boundary and ordinary results
 STATEMENT: >>>
 ``ZResult``, ``ZPanicReason``, and ``ZPanicInfo`` are declared in
-``include/zef.h``. Internal ``zef_fail`` builds a diagnostic record and calls
-the externally supplied non-returning ``z_panic`` function. The library does
-not provide a default panic implementation; the host smoke test supplies an
-aborting handler. Expected empty, not-running, and not-found observations use
-``ZResult`` while invalid arguments, lifecycle violations, ownership failures,
-resource exhaustion, and state errors route through the panic boundary.
+``include/zef.h``. Fatal framework checks use ``ZEF_PANIC`` directly or
+``ZEF_REQUIRE`` for conditional checks; both capture the framework source
+location before calling the externally supplied non-returning ``z_panic``
+function. The library does not provide a default panic implementation; the
+host smoke test supplies an aborting handler. Expected empty, not-running, and
+not-found observations use ``ZResult`` while invalid arguments, lifecycle
+violations, ownership failures, resource exhaustion, and state errors route
+through the panic boundary.
 <<<
 COMMENT: Code references: include/zef.h; src/zef_message.c; tests/zef_smoke_test.c.
 RELATIONS:
@@ -245,12 +253,12 @@ RELATIONS:
 
 [REQUIREMENT]
 UID: ZEF-IMP-021
-TITLE: Bounded state-graph validation
+TITLE: Runtime state consistency validation
 STATEMENT: >>>
-Machine initialization checks the non-null root, root-parent relationship,
-parent cycles, every declared child and sibling link, initial-child membership,
-and the depth of every reachable parent chain. Runtime transition validation
-checks that a target reaches the configured root within the depth limit.
+Machine initialization checks the non-null root, root-parent relationship, and
+parent cycles. Runtime startup and transition validation check initial-child
+relationships and that transition targets reach the configured root within the
+depth limit.
 Startup and dispatch track explicit lifecycle flags; startup enters the root
 and follows initial links, while a self-transition leaves and re-enters the
 current node before following its initial links.
@@ -285,6 +293,35 @@ RELATIONS:
 - TYPE: File
   FORMAT: Sourcecode
   PATH: src/zef_kernel.c
+
+[[/SECTION]]
+
+[[SECTION]]
+TITLE: Actor composition
+
+[REQUIREMENT]
+UID: ZEF-IMP-031
+TITLE: Actor convenience implementation
+STATEMENT: >>>
+``src/zef_actor.c`` initializes a caller-owned ``ZActor`` by composing its
+embedded Machine, Mailbox, and Reactor in dependency order. The implementation
+passes through the application's state root, context, and Mailbox slot storage,
+then forwards registration and start to the existing Reactor APIs. It performs
+no allocation and adds no scheduler state.
+<<<
+COMMENT: Code references: include/zef.h; src/zef_actor.c; tests/zef_test_work.c.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-023
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: include/zef.h
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_actor.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: tests/zef_test_work.c
 
 [[/SECTION]]
 
@@ -393,11 +430,14 @@ TITLE: Ports, optional preemption, and verification
 UID: ZEF-IMP-070
 TITLE: Port callback boundary
 STATEMENT: >>>
-``ZPort`` is a public callback structure containing critical-section entry and
-leave, reschedule request, and idle operations. Kernel and TopicTable code use
-the critical callbacks when a Port is available. The current host test defines
-no-op callbacks directly in ``tests/zef_smoke_test.c``; there is no standalone
-host-port source file.
+The target port supplies global ``z_port_critical_enter`` and
+``z_port_critical_leave`` operations for processor-wide interrupt exclusion.
+``ZPort`` is a public callback structure containing only the Kernel-specific
+reschedule request and idle operations. Kernel, TopicTable, Mailbox, and
+Message-pool code use the global critical operations; unregistered Mailboxes
+and standalone Message pools are therefore protected as well. The generic
+library supplies a no-op host default, while a target port overrides the
+critical functions with strong definitions.
 <<<
 COMMENT: Code references: include/zef.h; src/zef_kernel.c; tests/zef_smoke_test.c.
 RELATIONS:
@@ -415,31 +455,72 @@ RELATIONS:
 
 [REQUIREMENT]
 UID: ZEF-IMP-071
-TITLE: Cortex-M0 port status
+TITLE: Cortex-M0 shared-stack port plan
 STATEMENT: >>>
-No Cortex-M0 critical-section, PendSV, low-power idle, or target panic source
-appears in the current tree. Cortex-M0/M0+ support is explicitly deferred to
-Phase 3, after the generic cooperative core and host-port acceptance. The
-public ``ZPort`` callback shape is the target-neutral boundary for that later
-port; the current phase makes no target-support claim.
+The initial Cortex-M0/M0+ Port source now provides global PRIMASK critical sections,
+PendSV rescheduling, WFI idle, and shared-stack exception entry and return.
+Target startup/vector integration and hardware validation remain later-phase
+work. The selected design is a shared-stack activation port: Reactor handlers
+execute on one MSP stack, higher-priority ready Reactors nest through deferred
+exception activation, and no Reactor receives process-stack storage. The
+the scheduler-only ``ZPort`` callback shape remains the target-neutral boundary; target
+exception entry and return are private port implementation details.
 <<<
-COMMENT: No code reference is present for this deferred target port.
+COMMENT: Code references: ``ports/arm-cm0p/zef_arm_cm0p_port.c`` and ``ports/arm-cm0p/zef_arm_cm0p_port.h``. Startup, vector, linker-stack, and hardware validation work remains.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-040
+- TYPE: Parent
+  VALUE: ZEF-IF-042
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: ports/arm-cm0p/zef_arm_cm0p_port.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: ports/arm-cm0p/zef_arm_cm0p_port.h
 
 [REQUIREMENT]
 UID: ZEF-IMP-072
-TITLE: Optional preemptive scheduler status
+TITLE: Shared-stack activation status
 STATEMENT: >>>
-No per-Reactor process stacks, exception-frame setup, callee-saved register
-switching, or preemptive Reactor removal code appears in the current tree. The
-implemented scheduler is cooperative and run-to-completion.
+No per-Reactor process stacks or callee-saved register switching appear in the
+current tree. The scheduler's portable activation path tracks whether a newly
+runnable Reactor can preempt the active priority and provides an internal
+higher-priority activation entry point. The target Port now supplies the
+exception-frame boundary; the build-time execution mode controls whether its
+PendSV activation machinery is emitted. Cooperative mode remains the default.
 <<<
-COMMENT: No code reference is present for this deferred scheduler.
+COMMENT: Code references: ``src/zef_kernel.c`` and ``src/zef_internal.h``.
 RELATIONS:
 - TYPE: Parent
   VALUE: ZEF-IF-040
+- TYPE: Parent
+  VALUE: ZEF-IF-042
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_kernel.c
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: src/zef_internal.h
+
+[REQUIREMENT]
+UID: ZEF-IMP-074
+TITLE: Shared-stack target assembly boundary
+STATEMENT: >>>
+The Cortex-M0/M0+ port shall use a naked PendSV entry to defer activation
+until the last nested interrupt exits, synthesize a valid exception frame to
+enter the Kernel activation routine in Thread mode, and use an NMI or reserved
+IRQ return path to resume the interrupted shared-stack activation. The port
+shall use ``PRIMASK`` rather than ``BASEPRI`` and shall preserve the Armv6-M
+exception-frame alignment and Thumb-state requirements.
+<<<
+COMMENT: The exception boundary is implemented in ``ports/arm-cm0p/zef_arm_cm0p_port.c``; target startup integration and hardware validation are not yet complete.
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-IF-042
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: ports/arm-cm0p/zef_arm_cm0p_port.c
 
 [REQUIREMENT]
 UID: ZEF-IMP-073

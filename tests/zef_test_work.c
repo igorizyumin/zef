@@ -47,7 +47,7 @@ typedef struct {
 
 static HostPortState *g_port_state;
 
-static ZCriticalState test_critical_enter(void)
+ZCriticalState z_port_critical_enter(void)
 {
     ZCriticalState previous = g_port_state != NULL ? g_port_state->masked : 0u;
     if (g_port_state != NULL) {
@@ -57,7 +57,7 @@ static ZCriticalState test_critical_enter(void)
     return previous;
 }
 
-static void test_critical_leave(ZCriticalState state)
+void z_port_critical_leave(ZCriticalState state)
 {
     if (g_port_state != NULL) {
         g_port_state->masked = state;
@@ -82,8 +82,6 @@ static void test_idle(void)
 static ZPort test_port(void)
 {
     ZPort port = {
-        test_critical_enter,
-        test_critical_leave,
         test_request_reschedule,
         test_idle
     };
@@ -98,10 +96,22 @@ typedef struct {
     ZKernel *kernel;
 } HandlerContext;
 
+typedef struct {
+    ZMailbox *destination;
+    ZMsg *message;
+    ZBool posted;
+} PostProbe;
+
+static void post_static_message(ZMailbox *mailbox, ZMsg *message);
+
 static ZAction count_handler(void *context, ZMsg const *message)
 {
     HandlerContext *handler = context;
     ZTopic topic = z_message_topic(message);
+    if (g_port_state != NULL) {
+        /* User code must run after the scheduler's critical section ends. */
+        CHECK(g_port_state->masked == 0u);
+    }
     ++handler->handled;
     if (topic < 8u) {
         ++handler->topic_counts[topic];
@@ -112,6 +122,24 @@ static ZAction count_handler(void *context, ZMsg const *message)
         handler->priorities[handler->priority_count++] = priority;
     }
     return (ZAction){ Z_ACTION_HANDLED, NULL };
+}
+
+static ZAction post_probe_handler(void *context, ZMsg const *message)
+{
+    PostProbe *probe = context;
+    (void)message;
+    if (!probe->posted) {
+        post_static_message(probe->destination, probe->message);
+        probe->posted = 1u;
+    }
+    return (ZAction){ Z_ACTION_HANDLED, NULL };
+}
+
+static void post_static_message(ZMailbox *mailbox, ZMsg *message)
+{
+    ZMsg *pending = message;
+    z_mailbox_post(mailbox, &pending);
+    CHECK(pending == NULL);
 }
 
 static ZStateNode make_root(HandlerContext *context)
@@ -137,6 +165,7 @@ static void test_public_surface(void)
     ZStateNode state = { 0 };
     ZMachine machine = { 0 };
     ZReactor reactor = { 0 };
+    ZActor actor = { 0 };
     ZKernel kernel = { 0 };
     ZTopicTable topics = { 0 };
     ZClock clock = { 0 };
@@ -154,6 +183,7 @@ static void test_public_surface(void)
     (void)state;
     (void)machine;
     (void)reactor;
+    (void)actor;
     (void)kernel;
     (void)topics;
     (void)clock;
@@ -164,6 +194,45 @@ static void test_public_surface(void)
     CHECK(Z_OK == 0);
     CHECK(Z_EMPTY != Z_OK);
     CHECK(Z_ACTION_HANDLED != Z_ACTION_UNHANDLED);
+}
+
+/* @relation(ZEF-TEST-035, scope=actor-composition) */
+static void test_actor_composition(void)
+{
+    HostPortState port_state = { 0u, 0u, 0u, 0u };
+    ZPort port;
+    ZKernel kernel;
+    ZActor actor;
+    ZStateNode root;
+    ZMsg const *slots[2];
+    HandlerContext context = { 0 };
+    ZMsg message_storage;
+    ZMsg const *message = NULL;
+
+    g_port_state = &port_state;
+    port = test_port();
+    z_kernel_init(&kernel, &port);
+    root = make_root(&context);
+    context.kernel = &kernel;
+    z_actor_init(&actor, &root, &context, slots, 2u);
+    CHECK(actor.reactor.machine == &actor.machine);
+    CHECK(actor.reactor.mailbox == &actor.mailbox);
+    CHECK(actor.mailbox.owner == NULL);
+    CHECK(actor.reactor.context == &context);
+    CHECK(z_actor_register(&kernel, &actor, 2u) == 2u);
+    CHECK(actor.mailbox.owner == &actor.reactor);
+    z_actor_start(&kernel, &actor);
+
+    z_message_static_init(&message_storage, 4u, NULL, 0u);
+    EXPECT_PANIC(z_mailbox_postpone(&actor.mailbox, &message_storage),
+                 Z_PANIC_INVALID_ARGUMENT);
+    message = &message_storage;
+    Z_MSG_POST(&actor, message);
+    CHECK(message == NULL);
+    CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
+    CHECK(context.handled == 1u);
+    CHECK(z_machine_state(&actor.machine) == &root);
+    g_port_state = NULL;
 }
 
 /* @relation(ZEF-TEST-002, scope=fixed-pool-message-access) */
@@ -184,6 +253,7 @@ static void test_pool_and_payload(void)
     z_message_pool_init(&pools[0], small_storage, sizeof(small_storage), 64u, 2u);
     z_message_pool_init(&pools[1], large_storage, sizeof(large_storage), 128u, 1u);
     z_message_pool_set_init(&set, pools, 2u);
+    z_message_factory_init(&set);
     z_mailbox_init(&mailbox, slots, 2u);
 
     payload = Z_MSG_BEGIN(&set, 5u, uint32_t, &message);
@@ -210,6 +280,14 @@ static void test_pool_and_payload(void)
     CHECK(z_message_payload_size(taken) == 70u);
     z_message_release(taken);
     CHECK(pools[1].free_count == pools[1].block_count);
+
+    message = NULL;
+    payload = Z_MSG_NEW(7u, uint32_t, &message);
+    *payload = 0xCAFEBABEu;
+    CHECK(z_message_topic(message) == 7u);
+    CHECK(*Z_MSG_PAYLOAD(message, uint32_t) == 0xCAFEBABEu);
+    z_message_release(message);
+    CHECK(pools[0].free_count == pools[0].block_count);
 }
 
 /* @relation(ZEF-TEST-004, scope=panic-boundary-and-preserved-state) */
@@ -238,6 +316,7 @@ static void test_failure_paths(void)
 
     EXPECT_PANIC(z_message_pool_init(&pool, storage + 1u, sizeof(storage) - 1u,
                                      64u, 1u), Z_PANIC_CONFIGURATION);
+    CHECK(g_last_panic.file != NULL && g_last_panic.line != 0u);
     EXPECT_PANIC(z_mailbox_init(&mailbox, slots, 0u), Z_PANIC_CONFIGURATION);
     EXPECT_PANIC(z_message_static_init(&static_message, 1u, NULL, 1u),
                  Z_PANIC_INVALID_ARGUMENT);
@@ -252,7 +331,7 @@ static void test_failure_paths(void)
     (void)Z_MSG_BEGIN(&set, 2u, uint32_t, &second);
     free_before = pool.free_count;
     EXPECT_PANIC(z_mailbox_post(&mailbox, &second), Z_PANIC_MAILBOX_FULL);
-    CHECK(second != NULL && second->kind == Z_MSG_DYNAMIC);
+    CHECK(second != NULL && second->kind == Z_MSG_KIND_DYNAMIC);
     CHECK(pool.free_count == free_before);
 
     CHECK(z_mailbox_take(&mailbox, &taken) == Z_OK);
@@ -409,6 +488,46 @@ static void test_mailbox_behavior(void)
         CHECK(z_mailbox_take(&wrap_mailbox, &taken) == Z_OK && taken != NULL);
         z_message_release(taken);
     }
+
+    {
+        ZMsg const *source_slots[4];
+        ZMsg const *destination_slots[4];
+        ZMailbox source;
+        ZMailbox destination;
+        ZMsg source_one;
+        ZMsg source_two;
+        ZMsg source_three;
+        ZMsg destination_message;
+
+        z_mailbox_init(&source, source_slots, 4u);
+        z_mailbox_init(&destination, destination_slots, 4u);
+        z_message_static_init(&source_one, 21u, NULL, 0u);
+        z_message_static_init(&source_two, 22u, NULL, 0u);
+        z_message_static_init(&source_three, 23u, NULL, 0u);
+        z_message_static_init(&destination_message, 99u, NULL, 0u);
+        z_mailbox_postpone(&source, &source_one);
+        z_mailbox_postpone(&source, &source_two);
+        z_mailbox_postpone(&source, &source_three);
+        z_mailbox_postpone(&destination, &destination_message);
+
+        CHECK(z_mailbox_recall(&destination, &source) == Z_OK);
+        CHECK(z_mailbox_take(&destination, &taken) == Z_OK &&
+              z_message_topic(taken) == 23u);
+        z_message_release(taken);
+        CHECK(z_mailbox_recall(&destination, &source) == Z_OK);
+        CHECK(z_mailbox_take(&destination, &taken) == Z_OK &&
+              z_message_topic(taken) == 22u);
+        z_message_release(taken);
+        CHECK(z_mailbox_recall(&destination, &source) == Z_OK);
+        CHECK(z_mailbox_take(&destination, &taken) == Z_OK &&
+              z_message_topic(taken) == 21u);
+        z_message_release(taken);
+        CHECK(z_mailbox_recall(&destination, &source) == Z_EMPTY);
+        CHECK(z_mailbox_take(&destination, &taken) == Z_OK &&
+              z_message_topic(taken) == 99u);
+        z_message_release(taken);
+    }
+
 }
 
 typedef struct {
@@ -474,8 +593,6 @@ static void test_machine_behavior(void)
 
     first.parent = &root;
     second.parent = &root;
-    root.children = &first;
-    first.sibling = &second;
     g_second_state = &second;
     g_invalid_state = &outside;
     z_machine_init(&machine, &root, &context);
@@ -503,25 +620,6 @@ static void test_machine_behavior(void)
     z_message_static_init(&message, 6u, NULL, 0u);
     EXPECT_PANIC(z_machine_dispatch(&machine, &message), Z_PANIC_STATE);
     CHECK(z_machine_state(&machine) == &second);
-}
-
-/* @relation(ZEF-TEST-013, scope=state-graph-validation) */
-static void test_machine_graph_validation(void)
-{
-    ZMachine machine;
-    ZStateNode root = { NULL, NULL, NULL, NULL, NULL };
-    ZStateNode child = { &root, NULL, NULL, NULL, NULL };
-    ZStateNode sibling = { &root, NULL, NULL, NULL, NULL };
-
-    root.initial = &child;
-    root.children = &child;
-    child.sibling = &child;
-    EXPECT_PANIC(z_machine_init(&machine, &root, NULL), Z_PANIC_STATE);
-
-    root.children = &child;
-    root.initial = &sibling;
-    child.sibling = NULL;
-    EXPECT_PANIC(z_machine_init(&machine, &root, NULL), Z_PANIC_STATE);
 }
 
 typedef struct {
@@ -606,9 +704,6 @@ static void test_machine_fast_transitions(void)
     child.parent = &parent;
     parent.parent = &root;
     sibling.parent = &root;
-    root.children = &parent;
-    child.sibling = NULL;
-    parent.sibling = &sibling;
     g_fast_child = &child;
     g_fast_parent = &parent;
     g_fast_sibling = &sibling;
@@ -764,14 +859,6 @@ static void test_complex_machine_hierarchy(void)
     context.right_leaf = &right_leaf;
     context.app = &app;
     context.emergency_child = &emergency_child;
-    root.children = &app;
-    app.sibling = &emergency;
-    app.children = &left;
-    left.sibling = &right;
-    left.children = &left_leaf;
-    left_leaf.sibling = &left_sibling;
-    right.children = &right_leaf;
-    emergency.children = &emergency_child;
 
     z_machine_init(&machine, &root, &context);
     z_machine_start(&machine);
@@ -852,16 +939,16 @@ static void test_kernel_behavior(void)
     z_reactor_start(&kernel, ids[1]);
 
     z_message_static_init(&message, 1u, NULL, 0u);
-    z_mailbox_postpone(&mailboxes[0], &message);
-    z_mailbox_postpone(&mailboxes[1], &message);
+    post_static_message(&mailboxes[0], &message);
+    post_static_message(&mailboxes[1], &message);
     CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
     CHECK(contexts[1].handled == 1u && contexts[2].handled == 0u);
     CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
     CHECK(contexts[0].handled == 1u);
-    z_mailbox_postpone(&mailboxes[2], &message);
+    post_static_message(&mailboxes[2], &message);
     CHECK(z_kernel_run_one(&kernel) == Z_NO_WORK);
     z_reactor_start(&kernel, ids[2]);
-    z_mailbox_postpone(&mailboxes[1], &message);
+    post_static_message(&mailboxes[1], &message);
     CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
     CHECK(contexts[1].handled == 2u);
     CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
@@ -878,6 +965,62 @@ static void test_kernel_behavior(void)
         g_jump_from_idle = 0u;
     }
     CHECK(z_mailbox_take(&mailboxes[0], &taken) == Z_EMPTY);
+    g_port_state = NULL;
+}
+
+/* @relation(ZEF-TEST-034, scope=shared-stack-priority-gate) */
+static void test_shared_stack_priority_gate(void)
+{
+    HostPortState port_state = { 0u, 0u, 0u, 0u };
+    ZPort port;
+    ZKernel kernel;
+    ZStateNode low_root;
+    ZStateNode high_root;
+    ZMachine low_machine;
+    ZMachine high_machine;
+    ZMsg const *low_slots[2];
+    ZMsg const *high_slots[2];
+    ZMailbox low_mailbox;
+    ZMailbox high_mailbox;
+    ZReactor low_reactor;
+    ZReactor high_reactor;
+    ZMsg message;
+    PostProbe low_probe;
+    PostProbe high_probe;
+    unsigned reschedules_before_high;
+
+    g_port_state = &port_state;
+    port = test_port();
+    z_kernel_init(&kernel, &port);
+    low_root = (ZStateNode){ NULL, NULL, post_probe_handler, NULL, NULL };
+    high_root = (ZStateNode){ NULL, NULL, post_probe_handler, NULL, NULL };
+    z_mailbox_init(&low_mailbox, low_slots, 2u);
+    z_mailbox_init(&high_mailbox, high_slots, 2u);
+    z_message_static_init(&message, 1u, NULL, 0u);
+    low_probe = (PostProbe){ &high_mailbox, &message, 0u };
+    high_probe = (PostProbe){ &low_mailbox, &message, 0u };
+    z_machine_init(&low_machine, &low_root, &low_probe);
+    z_machine_init(&high_machine, &high_root, &high_probe);
+    z_reactor_init(&low_reactor, &(ZReactorConfig){
+        &low_machine, &low_mailbox, NULL
+    });
+    z_reactor_init(&high_reactor, &(ZReactorConfig){
+        &high_machine, &high_mailbox, NULL
+    });
+    (void)z_reactor_register(&kernel, &low_reactor, 1u);
+    (void)z_reactor_register(&kernel, &high_reactor, 3u);
+    z_reactor_start(&kernel, 1u);
+    z_reactor_start(&kernel, 3u);
+
+    post_static_message(&low_mailbox, &message);
+    reschedules_before_high = port_state.reschedules;
+    CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
+    CHECK(low_probe.posted && port_state.reschedules > reschedules_before_high);
+
+    reschedules_before_high = port_state.reschedules;
+    CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
+    CHECK(high_probe.posted && port_state.reschedules == reschedules_before_high);
+    CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
     g_port_state = NULL;
 }
 
@@ -1029,7 +1172,7 @@ static void test_timer_cancellation(void)
     z_clock_init(&clock, &kernel);
     ZMsg ordinary;
     z_message_static_init(&ordinary, 4u, NULL, 0u);
-    z_mailbox_postpone(&mailbox, &ordinary);
+    post_static_message(&mailbox, &ordinary);
     z_timer_init_topic(&timer, &clock, id, 5u);
     z_timer_arm(&timer, 1u, 0u);
     z_clock_tick(&clock);
@@ -1151,12 +1294,12 @@ static void test_port_behavior(void)
 
     g_port_state = &port_state;
     port = test_port();
-    outer = port.critical_enter();
-    inner = port.critical_enter();
+    outer = z_port_critical_enter();
+    inner = z_port_critical_enter();
     CHECK(port_state.masked == 1u && port_state.enters == 2u);
-    port.critical_leave(inner);
+    z_port_critical_leave(inner);
     CHECK(port_state.masked == 1u);
-    port.critical_leave(outer);
+    z_port_critical_leave(outer);
     CHECK(port_state.masked == 0u && port_state.leaves == 2u);
 
     z_kernel_init(&kernel, &port);
@@ -1173,7 +1316,7 @@ static void test_port_behavior(void)
     CHECK(z_topic_unsubscribe(&topics, 1u, id) == Z_NOT_FOUND);
     z_message_static_init(&message, 1u, NULL, 0u);
     unsigned enters_before_post = port_state.enters;
-    z_mailbox_postpone(&mailbox, &message);
+    post_static_message(&mailbox, &message);
     CHECK(port_state.enters > enters_before_post &&
           port_state.leaves >= port_state.enters);
     CHECK(port_state.reschedules != 0u);
@@ -1207,7 +1350,7 @@ static void test_port_behavior(void)
         z_topic_table_init(&silent_topics, &silent_kernel);
         z_topic_subscribe(&silent_topics, 1u, silent_id);
         z_message_static_init(&silent_message, 1u, NULL, 0u);
-        z_mailbox_postpone(&silent_mailbox, &silent_message);
+        post_static_message(&silent_mailbox, &silent_message);
         CHECK(z_kernel_run_one(&silent_kernel) == Z_WORK_DONE);
         CHECK(silent_context.handled == 1u);
     }
@@ -1222,10 +1365,11 @@ int main(void)
     test_claims_and_static_messages();
     test_mailbox_behavior();
     test_machine_behavior();
-    test_machine_graph_validation();
     test_machine_fast_transitions();
     test_complex_machine_hierarchy();
+    test_actor_composition();
     test_kernel_behavior();
+    test_shared_stack_priority_gate();
     test_topic_behavior();
     test_timer_behavior();
     test_timer_cancellation();

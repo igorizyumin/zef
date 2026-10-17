@@ -141,6 +141,12 @@ It exposes ``ZEF_POOL_ALIGNMENT``, ``ZEF_TOPIC_BITMAP_WORD_BITS``, and
 and ``ZEF_MAX_TIMER_SPAN`` is less than half the representable ``ZTick`` range.
 The selected tick type is exposed as ``ZEF_TICK_TYPE``; its default is
 ``uint32_t``.
+
+The same header exposes ``ZEF_EXECUTION_COOPERATIVE`` and
+``ZEF_EXECUTION_PREEMPTIVE`` and selects ``ZEF_EXECUTION_MODE`` at build time.
+The default is cooperative. The preemptive value is a target-build choice and
+requires a Port that implements the shared-stack exception boundary; the mode
+is fixed for the lifetime of a Kernel.
 <<<
 RELATIONS:
 - TYPE: Parent
@@ -333,15 +339,17 @@ select the smallest available block size that can contain the complete
 Message, with caller-supplied order breaking equal-size ties. ``z_mailbox_post``,
 ``z_mailbox_post_front``, and ``z_topic_publish`` consume the ``ZMsg **`` before
 enqueueing or taking the subscriber snapshot. A normal delivery transfers the
-caller reference; ``postpone`` retains an additional reference for the
-destination Mailbox while the caller keeps its existing reference. Pool exhaustion uses
+caller reference for a dynamic Message; a static Message has no claim to
+transfer, but is still accepted and the caller pointer is consumed. ``postpone``
+retains an additional reference for the destination Mailbox while the caller
+keeps its existing reference. Pool exhaustion uses
 ``Z_PANIC_NO_MEMORY`` and does not return an exhausted result. Invalid
 construction lifecycle violations also panic. Retain and release are no-ops
 for static Messages, so generic receiver cleanup does not need to branch on
 Message kind. Dynamic release reclaims the block only after the last claim.
 
 Static Messages may be declared as immutable objects and are accepted by
-read-only delivery APIs without pool bookkeeping.
+normal and read-only delivery APIs without pool bookkeeping.
 
 ``ZMsg`` is a complete public structure whose framework-owned members are
 reserved by documentation. Applications define the payload type rather than
@@ -368,9 +376,11 @@ STATEMENT: >>>
 Port contract
 -------------
 
-The host Port implements fake interrupt masking. A Cortex-M0 Port that maps
-the same contract to ``PRIMASK`` and ``PendSV`` is deferred to a later phase;
-the current baseline is the generic cooperative core and its host Port.
+The host Port implements fake interrupt masking. A Cortex-M0/M0+ Port that
+maps the same contract to ``PRIMASK`` and ``PendSV`` is deferred to a later
+phase; the selected target model is a shared MSP execution stack with no
+per-Reactor process stacks. The current baseline is the generic cooperative
+core and its host Port.
 
 Critical leave restores the saved state. The Port is an internal framework
 adapter; it does not own the application panic boundary and does not classify
@@ -398,6 +408,10 @@ receive a borrowed const pointer. The construction and read surface is:
                          ZTopic topic,
                          size_t payload_size,
                          ZMsg **message);
+   void z_message_factory_init(ZMessagePoolSet *pool_set);
+   void *z_message_begin_default(ZTopic topic,
+                                 size_t payload_size,
+                                 ZMsg **message);
    void *z_message_payload_mut(ZMsg *message);
    void *z_message_payload_mut_checked(ZMsg *message,
                                        size_t expected_size);
@@ -410,6 +424,16 @@ receive a borrowed const pointer. The construction and read surface is:
 
    #define Z_MSG_BEGIN(pool_set_, topic_, Type_, msg_) \
        ((Type_ *)z_message_begin((pool_set_), (topic_), sizeof(Type_), (msg_)))
+
+   #define Z_MSG_NEW(topic_, Type_, msg_) \
+       ((Type_ *)z_message_begin_default((topic_), sizeof(Type_), (msg_)))
+
+   #define Z_MSG_STATIC(name_, topic_) \
+       static ZMsg const name_ = { \
+           .kind = Z_MSG_KIND_STATIC, .topic = (topic_), \
+           .payload_size = 0u, .payload = NULL, .claims = 0u, \
+           .pool = NULL, .valid = 1u \
+       }
 
    #define Z_MSG_PAYLOAD(message_, Type_) \
        ((Type_ const *)z_message_payload_checked((message_), sizeof(Type_)))
@@ -442,6 +466,13 @@ conditions use the panic boundary. Read access to a dynamic Message requires
 the caller to hold a live reference; an absent or stale dynamic reference is
 an ownership violation. Read access to a static Message requires only that the
 caller-owned Message and payload remain alive and immutable.
+
+Applications with one message-pool set may initialize the application-wide
+factory once with ``z_message_factory_init`` and use ``Z_MSG_NEW`` without
+threading a pool-set pointer through every message-producing object. The
+explicit ``Z_MSG_BEGIN`` path remains available for tests, multiple independent
+pool sets, and code that intentionally selects a pool set. Calling the default
+construction path before factory initialization is a lifecycle panic.
 <<<
 RELATIONS:
 - TYPE: Parent
@@ -550,6 +581,8 @@ surface is:
    void z_mailbox_postpone(ZMailbox *mailbox,
                            ZMsg const *message);
     void z_mailbox_post_front(ZMailbox *mailbox, ZMsg **message);
+   ZResult z_mailbox_recall(ZMailbox *destination,
+                            ZMailbox *source);
    ZResult z_mailbox_take(ZMailbox *mailbox,
                           ZMsg const **message_out);
 
@@ -566,7 +599,12 @@ surface is:
 Empty ``take`` returns ``Z_EMPTY`` without writing its output. Full enqueue
 uses the panic boundary. ``post_front`` places the new Message immediately
 before the current next Message; repeated front posts are therefore taken in
-last-in-first-out order. ``remove_if`` evaluates its predicate once per queued
+last-in-first-out order. ``recall`` moves exactly one newest Message from an
+unassigned source Mailbox to the front of the destination Mailbox, transferring
+queue ownership without changing claims; it returns ``Z_EMPTY`` when the source
+is empty, rejects a Kernel-managed source, and uses the panic boundary if the
+destination is full. ``remove_if``
+evaluates its predicate once per queued
 entry in delivery order, preserves the order of retained entries, returns the
 number removed, and releases each removed dynamic Message claim. A null
 predicate is an invalid argument and invokes the panic handler. The minimum
@@ -583,6 +621,10 @@ a static Message, the application receives a reference with no claim; calling
 Message storage is shared between the existing caller reference and the new
 Mailbox reference for dynamic Messages, while static Messages simply share the
 same reference. The payload is not copied.
+``z_mailbox_postpone`` is only valid for an unassigned Mailbox; passing a
+Kernel-managed Mailbox is an invalid argument. Actor and Reactor Mailboxes
+must use normal post or front-post operations so scheduling ownership remains
+with the Kernel.
 
 .. code-block:: c
 
@@ -633,8 +675,6 @@ application context, but not descriptor storage.
        ZStateHandler handle;
        ZStateHook enter;
        ZStateHook leave;
-       ZStateNode const *children;
-       ZStateNode const *sibling;
    };
 
    void z_machine_init(ZMachine *machine,
@@ -645,12 +685,10 @@ application context, but not descriptor storage.
                            ZMsg const *message);
    ZStateNode const *z_machine_state(ZMachine const *machine);
 
-``children`` and ``sibling`` optionally describe the complete child graph for
-initialization-time validation. When supplied, every listed child must point
-back to its containing node, the initial child must be listed, and sibling
-cycles are rejected. Legacy descriptors may leave them null, in which case
-the ``initial`` chain remains the declared graph. Initialization validates the
-root and State graph in assertion-enabled builds;
+The ``parent`` and ``initial`` links describe the runtime hierarchy.
+Initialization validates the root and parent chain, while runtime startup and
+transition operations fail through the panic boundary when an initial child or
+transition target is inconsistent with that hierarchy;
 an invalid graph invokes the panic handler with ``Z_PANIC_STATE`` before
 initialization completes. In assertion-disabled builds the application is
 responsible for supplying a valid graph. Handlers receive a const Message
@@ -752,6 +790,59 @@ RELATIONS:
 [[/SECTION]]
 
 [[SECTION]]
+TITLE: Actor convenience composition
+
+[REQUIREMENT]
+UID: ZEF-IF-023
+TITLE: Actor composition surface
+STATEMENT: >>>
+``ZActor`` is a convenience composition of one ``ZReactor``, one
+``ZMailbox``, and one ``ZMachine``. Its initialization accepts a state-machine
+root, application context, and caller-owned Mailbox slot storage, then
+initializes the three embedded objects with consistent references. Actor
+registration and start forward to the existing Reactor lifecycle and do not
+introduce a separate scheduler entity, allocation policy, or stop operation.
+
+.. code-block:: c
+
+   void z_actor_init(ZActor *actor,
+                     ZStateNode const *root,
+                     void *context,
+                     ZMsg const **mailbox_slots,
+                     uint16_t mailbox_capacity);
+   ZReactorId z_actor_register(ZKernel *kernel,
+                               ZActor *actor,
+                               ZReactorId id);
+   void z_actor_start(ZKernel *kernel, ZActor *actor);
+   #define Z_MSG_POST(actor_, msg_) \
+       do { \
+           ZMsg *zef_post_message_ = (ZMsg *)(msg_); \
+           z_mailbox_post(&(actor_)->mailbox, &zef_post_message_); \
+           (msg_) = zef_post_message_; \
+       } while (0)
+
+The Actor owns the embedded framework objects but the application owns the
+state graph, context, and Mailbox slot storage. The embedded Mailbox remains
+the normal posting and deferred-queue interface, and the embedded Reactor
+retains the assigned identity and priority semantics.
+``Z_MSG_POST(actor, msg)`` is the typed composition convenience for the normal
+actor destination; it transfers ``*msg`` to the actor Mailbox and leaves the
+caller pointer null. The variable may point to either a dynamic or static
+Message; static Messages carry no claim. Direct Mailbox posting remains
+available for standalone or non-Actor destinations.
+``Z_MSG_POST`` is ISR-safe because it delegates to the same bounded,
+critical-section-protected ``z_mailbox_post`` operation; there is no separate
+Actor-specific ISR posting API.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-034
+- TYPE: File
+  VALUE: docs/api-requirements.sdoc
+
+[[/SECTION]]
+
+[[SECTION]]
 TITLE: Kernel, topics, and Clock
 
 [REQUIREMENT]
@@ -811,7 +902,7 @@ building ``ZMsg`` and returns a delivery count on normal completion.
                             ZTopicTable *table,
                             ZMsg *message);
 
-Subscription changes and publication snapshots use the Port critical-section
+Subscription changes and publication snapshots use the global Port critical-section
 contract. The Kernel argument to publication shall be the Kernel bound to the
 TopicTable. A publication observes exactly the subscription snapshot taken in
 that critical section; later changes do not affect it. Repeating an existing
@@ -887,26 +978,32 @@ TITLE: Port and verification surface
 UID: ZEF-IF-040
 TITLE: Internal port adapter
 STATEMENT: >>>
-The host and target Ports implement an internal adapter used by the framework
-for interrupt masking, deferred rescheduling, and idle behavior. These
-callbacks are framework-owned port operations, not
-application-callable API functions.
+The target Port supplies global critical-section operations used by all
+framework objects, plus Kernel scheduler callbacks for deferred rescheduling
+and idle behavior. Critical sections are processor-global and do not belong to
+one Kernel or Mailbox.
 
 .. code-block:: c
 
    typedef uint32_t ZCriticalState;
 
+   ZCriticalState z_port_critical_enter(void);
+   void z_port_critical_leave(ZCriticalState state);
+
    struct ZPort {
-       ZCriticalState (*critical_enter)(void);
-       void (*critical_leave)(ZCriticalState state);
        void (*request_reschedule)(void);
        void (*idle)(void);
    };
 
-Critical leave restores the saved state. Fatal conditions call the
+Critical entry and leave restore the saved state and support nesting. The
+framework uses them around scheduler state, Mailbox ring state, Message claim
+counts, and Message-pool free-list mutations. These hooks do not require a
+Kernel and therefore also protect unregistered Mailboxes and standalone
+Message pools. Fatal conditions call the
 application-provided ``z_panic`` function; the panic function is not a Port
 callback. Target-specific context-switching operations are outside this
-surface until the preemptive port is included in a phase baseline.
+surface until the shared-stack preemptive port is included in a phase
+baseline.
 <<<
 RELATIONS:
 - TYPE: Parent
@@ -915,6 +1012,30 @@ RELATIONS:
   VALUE: ZEF-WHAT-071
 - TYPE: File
   VALUE: docs/api-requirements.sdoc
+
+[REQUIREMENT]
+UID: ZEF-IF-042
+TITLE: Shared-stack preemption assumptions
+STATEMENT: >>>
+The shared-stack preemptive target contract shall use one linker-provided,
+8-byte-aligned execution stack for Reactor activation and shall not require a
+stack-storage field in ``ZReactor``. A target Port shall reserve the lowest
+system-handler priority for deferred rescheduling, shall use the target's
+available global interrupt mask for Kernel critical sections, and shall expose
+the configured stack bound and observed high-water mark to target diagnostics.
+Reactor handlers shall be non-blocking, shall not retain automatic-storage
+addresses across a dispatch boundary, and shall not require independent saved
+continuations. The host Port may model eligibility and nested activation, but
+cannot claim to verify target exception-frame construction or exception return.
+<<<
+RELATIONS:
+- TYPE: Parent
+  VALUE: ZEF-WHAT-071
+- TYPE: Parent
+  VALUE: ZEF-IF-040
+- TYPE: File
+  FORMAT: Sourcecode
+  PATH: docs/api-requirements.sdoc
 
 [REQUIREMENT]
 UID: ZEF-IF-041
@@ -934,11 +1055,13 @@ or handler context:
 Those operations shall be bounded, shall not allocate from a general-purpose
 allocator or block, and shall use the documented critical-section and ownership
 rules. The ``Z_MSG_BEGIN`` and ``Z_MSG_PAYLOAD_MUT`` macros inherit the
-ISR-safe classification of their fixed-pool construction functions. Message
+ISR-safe classification of their fixed-pool construction functions, and
+``Z_MSG_POST`` inherits the ISR-safe classification of ``z_mailbox_post``.
+Message
 read access, retain/release, pool initialization, Mailbox removal and take,
 subscription changes, Machine, Reactor, Kernel, Clock, and Timer operations
 are thread-only in Phase 1. A later phase may add a separately named ISR
-variant, but no unclassified application API is permitted. Internal Port
+variant for operations that are currently thread-only, but no unclassified application API is permitted. Internal Port
 callbacks are outside this application API classification.
 <<<
 RELATIONS:

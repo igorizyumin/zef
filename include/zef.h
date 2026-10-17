@@ -48,8 +48,40 @@ typedef struct {
 
 typedef void (*ZPanicHandler)(ZPanicInfo const *info);
 
-/* Applications may provide this symbol. The library supplies an aborting weak default. */
+/* Applications must provide this non-returning panic hook. */
 _Noreturn void z_panic(ZPanicInfo const *info);
+
+/* GCC and Clang provide the basename-only extension; retain portability for
+ * compilers such as MSVC that only provide the standard __FILE__. */
+#if defined(__FILE_NAME__)
+#define ZEF_SOURCE_FILE __FILE_NAME__
+#else
+#define ZEF_SOURCE_FILE __FILE__
+#endif
+
+/* Small helpers for application- and framework-side validation. */
+#define ZEF_PANIC(reason_, object_, detail_)                                      \
+    do {                                                                          \
+        ZPanicInfo zef_panic_info_ = {                                            \
+            (reason_), (object_), (detail_), ZEF_SOURCE_FILE, (uint32_t)__LINE__  \
+        };                                                                        \
+        z_panic(&zef_panic_info_);                                                \
+    } while (0)
+
+#if ZEF_ENABLE_ASSERTIONS
+#define ZEF_REQUIRE(condition_, reason_, object_, detail_)                       \
+    do {                                                                          \
+        if (!(condition_)) {                                                      \
+            ZEF_PANIC((reason_), (object_), (detail_));                           \
+        }                                                                         \
+    } while (0)
+#else
+/* Disabled builds omit both the condition evaluation and panic metadata. */
+#define ZEF_REQUIRE(condition_, reason_, object_, detail_)                       \
+    do {                                                                          \
+        (void)sizeof(condition_);                                                 \
+    } while (0)
+#endif
 
 typedef struct ZMessagePool ZMessagePool;
 typedef struct ZMessagePoolSet ZMessagePoolSet;
@@ -58,6 +90,7 @@ typedef struct ZMailbox ZMailbox;
 typedef struct ZStateNode ZStateNode;
 typedef struct ZMachine ZMachine;
 typedef struct ZReactor ZReactor;
+typedef struct ZActor ZActor;
 typedef struct ZKernel ZKernel;
 typedef struct ZTopicTable ZTopicTable;
 typedef struct ZClock ZClock;
@@ -65,9 +98,9 @@ typedef struct ZTimer ZTimer;
 typedef struct ZPort ZPort;
 
 typedef enum {
-    Z_MSG_DYNAMIC = 0,
-    Z_MSG_STATIC = 1,
-    Z_MSG_RECLAIMED = 2
+    Z_MSG_KIND_DYNAMIC = 0,
+    Z_MSG_KIND_STATIC = 1,
+    Z_MSG_KIND_RECLAIMED = 2
 } ZMessageKind;
 
 /* Framework-owned members are reserved; use the public operations below. */
@@ -105,8 +138,7 @@ struct ZMailbox {
     uint32_t head;
     uint32_t tail;
     uint16_t min_free;
-    ZKernel *kernel;             /* reserved: set by Reactor registration */
-    ZReactorId reactor_id;      /* reserved: set by Reactor registration */
+    ZReactor *owner;             /* reserved: set by Reactor registration */
     ZBool initialized;          /* reserved */
 };
 
@@ -121,8 +153,40 @@ typedef struct {
     ZStateNode const *target;
 } ZAction;
 
+static inline ZAction z_action_unhandled(void)
+{
+    return (ZAction){ .kind = Z_ACTION_UNHANDLED, .target = NULL };
+}
+
+static inline ZAction z_action_handled(void)
+{
+    return (ZAction){ .kind = Z_ACTION_HANDLED, .target = NULL };
+}
+
+static inline ZAction z_action_transition(ZStateNode const *target)
+{
+    return (ZAction){ .kind = Z_ACTION_TRANSITION, .target = target };
+}
+
 typedef ZAction (*ZStateHandler)(void *context, ZMsg const *message);
 typedef void (*ZStateHook)(void *context);
+
+/* Declare typed state callbacks while keeping the generic Machine ABI. */
+#define Z_STATE_HANDLER(Type_, name_)                                             \
+    static ZAction name_(Type_ *ctx, ZMsg const *message);                        \
+    static ZAction name_##_zef_adapter(void *context, ZMsg const *message)         \
+    {                                                                              \
+        return name_((Type_ *)context, message);                                   \
+    }                                                                              \
+    static ZAction name_(Type_ *ctx, ZMsg const *message)
+
+#define Z_STATE_HOOK(Type_, name_)                                                 \
+    static void name_(Type_ *ctx);                                                 \
+    static void name_##_zef_adapter(void *context)                                 \
+    {                                                                              \
+        name_((Type_ *)context);                                                   \
+    }                                                                              \
+    static void name_(Type_ *ctx)
 
 struct ZStateNode {
     ZStateNode const *parent;
@@ -130,9 +194,6 @@ struct ZStateNode {
     ZStateHandler handle;
     ZStateHook enter;
     ZStateHook leave;
-    /* Optional complete-child graph used for initialization validation. */
-    ZStateNode const *children;
-    ZStateNode const *sibling;
 };
 
 struct ZMachine {
@@ -161,9 +222,14 @@ struct ZReactor {
     ZBool started;               /* reserved */
 };
 
+/* A convenience composition of one Machine, Mailbox, and Reactor. */
+struct ZActor {
+    ZReactor reactor;
+    ZMailbox mailbox;
+    ZMachine machine;
+};
+
 struct ZPort {
-    ZCriticalState (*critical_enter)(void);
-    void (*critical_leave)(ZCriticalState state);
     void (*request_reschedule)(void);
     void (*idle)(void);
 };
@@ -215,15 +281,36 @@ struct ZTimer {
 typedef ZBool (*ZMsgPredicate)(ZMsg const *message, void *context);
 
 /* Message pools and payloads. */
+/* These target-port hooks are global to the processor, not owned by a Kernel.
+ * They must preserve and restore the previous interrupt/critical state and
+ * support nesting. The library supplies a no-op host default when a target
+ * port does not override them. */
+ZCriticalState z_port_critical_enter(void);
+void z_port_critical_leave(ZCriticalState state);
+
 void z_message_pool_init(ZMessagePool *pool, void *storage, size_t storage_size,
                          size_t block_size, uint16_t block_count);
 void z_message_pool_set_init(ZMessagePoolSet *pool_set, ZMessagePool *pools,
                               uint16_t count);
+/* Selects the application-wide pool set used by Z_MSG_NEW. */
+void z_message_factory_init(ZMessagePoolSet *pool_set);
 /* Stores the allocated Message through *message and returns its mutable payload. */
 void *z_message_begin(ZMessagePoolSet *pool_set, ZTopic topic, size_t payload_size,
                       ZMsg **message);
+/* Begins a message using the pool set configured by z_message_factory_init. */
+void *z_message_begin_default(ZTopic topic, size_t payload_size, ZMsg **message);
 void z_message_static_init(ZMsg *message, ZTopic topic,
                            void const *payload, size_t payload_size);
+#define Z_MSG_STATIC(name_, topic_) \
+    static ZMsg const name_ = { \
+        .kind = Z_MSG_KIND_STATIC, \
+        .topic = (topic_), \
+        .payload_size = 0u, \
+        .payload = NULL, \
+        .claims = 0u, \
+        .pool = NULL, \
+        .valid = 1u \
+    }
 void *z_message_payload_mut(ZMsg *message);
 void *z_message_payload_mut_checked(ZMsg *message, size_t expected_size);
 ZTopic z_message_topic(ZMsg const *message);
@@ -235,6 +322,8 @@ void z_message_release(ZMsg const *message);
 
 #define Z_MSG_BEGIN(pool_set_, topic_, Type_, msg_) \
     ((Type_ *)z_message_begin((pool_set_), (topic_), sizeof(Type_), (msg_)))
+#define Z_MSG_NEW(topic_, Type_, msg_) \
+    ((Type_ *)z_message_begin_default((topic_), sizeof(Type_), (msg_)))
 #define Z_MSG_PAYLOAD(message_, Type_) \
     ((Type_ const *)z_message_payload_checked((message_), sizeof(Type_)))
 #define Z_MSG_PAYLOAD_MUT(msg_, Type_) \
@@ -242,10 +331,23 @@ void z_message_release(ZMsg const *message);
 
 /* Mailboxes. */
 void z_mailbox_init(ZMailbox *mailbox, ZMsg const **slots, uint16_t capacity);
-/* Transfers *message to the Mailbox and sets the caller's pointer to NULL. */
+/* ISR-safe. Transfers *message to the Mailbox and sets the caller's pointer
+ * to NULL. */
 void z_mailbox_post(ZMailbox *mailbox, ZMsg **message);
+/* ISR-safe convenience wrapper around z_mailbox_post. Transfers a message
+ * pointer variable to an Actor's Mailbox and nulls it. The variable may point
+ * to a dynamic or static Message. */
+#define Z_MSG_POST(actor_, msg_)                                      \
+    do {                                                              \
+        ZMsg *zef_post_message_ = (ZMsg *)(msg_);                    \
+        z_mailbox_post(&(actor_)->mailbox, &zef_post_message_);       \
+        (msg_) = zef_post_message_;                                  \
+    } while (0)
 void z_mailbox_post_front(ZMailbox *mailbox, ZMsg **message);
 void z_mailbox_postpone(ZMailbox *mailbox, ZMsg const *message);
+/* Move the newest Message from an unassigned source to the front of
+ * destination. */
+ZResult z_mailbox_recall(ZMailbox *destination, ZMailbox *source);
 ZResult z_mailbox_take(ZMailbox *mailbox, ZMsg const **message_out);
 uint16_t z_mailbox_count(ZMailbox const *mailbox);
 uint16_t z_mailbox_capacity(ZMailbox const *mailbox);
@@ -264,6 +366,10 @@ void z_reactor_init(ZReactor *reactor, ZReactorConfig const *config);
 /* The explicit ID is also the Reactor's strict priority; larger IDs run first. */
 ZReactorId z_reactor_register(ZKernel *kernel, ZReactor *reactor, ZReactorId id);
 void z_reactor_start(ZKernel *kernel, ZReactorId id);
+void z_actor_init(ZActor *actor, ZStateNode const *root, void *context,
+                  ZMsg const **mailbox_slots, uint16_t mailbox_capacity);
+ZReactorId z_actor_register(ZKernel *kernel, ZActor *actor, ZReactorId id);
+void z_actor_start(ZKernel *kernel, ZActor *actor);
 void z_kernel_init(ZKernel *kernel, ZPort const *port);
 ZRunResult z_kernel_run_one(ZKernel *kernel);
 void z_kernel_run_forever(ZKernel *kernel);

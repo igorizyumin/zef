@@ -16,8 +16,6 @@ typedef struct {
     unsigned handled;
 } TestContext;
 
-static ZCriticalState critical_enter(void) { return 0u; }
-static void critical_leave(ZCriticalState state) { (void)state; }
 static void request_reschedule(void) {}
 static void idle(void) {}
 
@@ -33,7 +31,7 @@ static ZAction handle_message(void *context, ZMsg const *message)
 
 static void test_end_to_end(void)
 {
-    ZPort port = { critical_enter, critical_leave, request_reschedule, idle };
+    ZPort port = { request_reschedule, idle };
     ZKernel kernel;
     z_kernel_init(&kernel, &port);
 
@@ -66,8 +64,11 @@ static void test_end_to_end(void)
     CHECK(z_kernel_run_one(&kernel) == Z_NO_WORK);
 
     ZMsg static_message;
+    ZMsg *static_message_pointer = NULL;
     z_message_static_init(&static_message, 1u, NULL, 0u);
-    z_mailbox_postpone(&mailbox, &static_message);
+    static_message_pointer = &static_message;
+    z_mailbox_post(&mailbox, &static_message_pointer);
+    CHECK(static_message_pointer == NULL);
     ZMsg const *taken = NULL;
     CHECK(z_mailbox_take(&mailbox, &taken) == Z_OK);
     CHECK(taken == &static_message);
@@ -84,22 +85,25 @@ static void test_end_to_end(void)
     CHECK(context.handled == 2u);
 
     /* Cancellation removes the timer's private message, not the ordinary entry. */
-    z_mailbox_postpone(&mailbox, &static_message);
+    ZMsg const *deferred_slots[1];
+    ZMailbox deferred;
+    z_mailbox_init(&deferred, deferred_slots, 1u);
+    z_mailbox_postpone(&deferred, &static_message);
     ZTimer cancellable;
     z_timer_init_topic(&cancellable, &clock, id, 2u);
     z_timer_arm(&cancellable, 1u, 0u);
     z_clock_tick(&clock);
-    CHECK(z_mailbox_count(&mailbox) == 2u);
-    CHECK(z_timer_cancel(&cancellable) == Z_OK);
     CHECK(z_mailbox_count(&mailbox) == 1u);
-    CHECK(z_mailbox_take(&mailbox, &taken) == Z_OK);
+    CHECK(z_timer_cancel(&cancellable) == Z_OK);
+    CHECK(z_mailbox_count(&mailbox) == 0u);
+    CHECK(z_mailbox_take(&deferred, &taken) == Z_OK);
     CHECK(taken == &static_message);
     z_message_release(taken);
 }
 
 static void test_topic_ordering(void)
 {
-    ZPort port = { critical_enter, critical_leave, request_reschedule, idle };
+    ZPort port = { request_reschedule, idle };
     ZKernel kernel;
     z_kernel_init(&kernel, &port);
 

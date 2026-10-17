@@ -73,7 +73,8 @@ The graph was reviewed after the split:
 - Generic cooperative core and host-Port acceptance precede target work.
 - Cortex-M0/M0+ critical sections, PendSV, startup, and target panic handling
   remain explicitly deferred to Phase 3 and do not silently expand the host
-  baseline.
+  baseline. The selected target model is shared MSP activation with no
+  per-Reactor process stacks.
 
 ## Ongoing rules
 

@@ -11,6 +11,15 @@ typedef union ZefMaxAlign {
     uint64_t integer_value;
 } ZefMaxAlign;
 
+/* Scheduler execution model. Applications may override this before including
+ * zef.h, or provide it as a compiler definition for the whole build. */
+#define ZEF_EXECUTION_COOPERATIVE 0
+#define ZEF_EXECUTION_PREEMPTIVE 1
+
+#ifndef ZEF_EXECUTION_MODE
+#define ZEF_EXECUTION_MODE ZEF_EXECUTION_COOPERATIVE
+#endif
+
 /* Build-time limits. Applications may override these before including zef.h. */
 #ifndef Z_MAX_REACTORS
 #define Z_MAX_REACTORS 8u
@@ -44,8 +53,17 @@ typedef union ZefMaxAlign {
 #define ZEF_ENABLE_ASSERTIONS 1
 #endif
 
+#if ZEF_ENABLE_ASSERTIONS != 0 && ZEF_ENABLE_ASSERTIONS != 1
+#error "ZEF_ENABLE_ASSERTIONS must be 0 or 1"
+#endif
+
 #ifndef ZEF_CLAIM_TYPE
 #define ZEF_CLAIM_TYPE uint16_t
+#endif
+
+#if ZEF_EXECUTION_MODE != ZEF_EXECUTION_COOPERATIVE && \
+    ZEF_EXECUTION_MODE != ZEF_EXECUTION_PREEMPTIVE
+#error "ZEF_EXECUTION_MODE must be ZEF_EXECUTION_COOPERATIVE or ZEF_EXECUTION_PREEMPTIVE"
 #endif
 
 #define ZEF_TICK_BITS (sizeof(ZEF_TICK_TYPE) * CHAR_BIT)

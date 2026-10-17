@@ -100,6 +100,11 @@ UID: ZEF-WHY-024
 TITLE: Future preemption without semantic drift
 STATEMENT: Product developers need to introduce stronger responsiveness or execution overlap later without changing behavior already understood by applications.
 
+[REQUIREMENT]
+UID: ZEF-WHY-025
+TITLE: Shared execution memory
+STATEMENT: Small-system developers need multiple reactive components to share a bounded execution-memory budget instead of reserving a full process stack for every component.
+
 [[/SECTION]]
 
 [[SECTION]]

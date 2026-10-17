@@ -11,6 +11,7 @@ def create_config() -> ProjectConfig:
             "docs/**",
             "include/**",
             "src/**",
+            "ports/**",
             "CMakeLists.txt",
             "strictdoc_config.py",
             "tests/**",
