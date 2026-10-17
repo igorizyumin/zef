@@ -1,5 +1,9 @@
 # ZEF requirements and design
 
+Start with the [ZEF introduction and user guide](introduction.md) for an
+overview of the actor model, hierarchical state machines, and practical
+state-machine examples.
+
 The requirements are organized as a recursive four-layer work-item graph:
 
 1. [`requirements.sdoc`](requirements.sdoc) — WHY: problems and user needs.
@@ -24,6 +28,18 @@ The `.sdoc` files are the authoritative work-item records. Generated StrictDoc
 output belongs in the ignored output directory. Implementation and test source
 files use `@relation(ZEF-..., scope=...)` markers to connect code to the work
 items it implements or verifies.
+
+## Doxygen API reference
+
+The public C API documentation is generated from `include/` and the
+Cortex-M0+ port header with:
+
+```text
+doxygen Doxyfile
+```
+
+The generated HTML entry point is `docs/doxygen/html/index.html`. Generated
+files are ignored by Git.
 
 ## LLVM coverage
 

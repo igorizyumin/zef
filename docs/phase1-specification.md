@@ -126,10 +126,12 @@ For immutable notifications with no payload, `Z_MSG_STATIC(name, topic)`
 declares a function-local or file-scope static constant `ZMsg` ready for
 posting or postponement. It requires no pool and has no ownership claim.
 
-`Z_MSG_PAYLOAD_MUT(msg, Type)` remains available for checked mutable
-re-access during construction, but it is not needed for the initial lookup:
+`Z_MSG_PAYLOAD_MUT(msg, Type)` remains available for checked mutable re-access
+during construction. It is intended for producer-side helper functions that
+receive a generic `ZMsg *` while the caller still owns the construction claim;
+it is not a state-handler access path. It is not needed for the initial lookup:
 `Z_MSG_BEGIN` already returns the typed payload pointer. The consuming post or
- publication consumes and nulls the construction pointer automatically.
+publication consumes and nulls the construction pointer automatically.
 
 Application handlers receive a read-only `ZMsg const *` borrowed reference.
 Mutable payload access exists through the `ZMsg *` construction pointer before
@@ -273,7 +275,7 @@ void z_actor_init(ZActor *actor,
                   ZMsg const **mailbox_slots,
                   uint16_t mailbox_capacity);
 ZReactorId z_actor_register(ZKernel *kernel, ZActor *actor, ZReactorId id);
-void z_actor_start(ZKernel *kernel, ZActor *actor);
+void z_actor_start(ZActor *actor);
 #define Z_MSG_POST(actor_, msg_) \
     do { \
         ZMsg *zef_post_message_ = (ZMsg *)(msg_); \

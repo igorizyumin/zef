@@ -3,6 +3,9 @@ strictdoc-out/
 output/
 __pycache__/
 
+# Doxygen generated documentation.
+docs/doxygen/
+
 # Local build and coverage output.
 build/
 build-nucleo/

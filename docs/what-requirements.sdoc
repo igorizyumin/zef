@@ -426,14 +426,14 @@ UID: ZEF-WHAT-061
 TITLE: Timer lifecycle errors
 STATEMENT: >>>
 Starting an armed Timer shall be fatal, stopping an already
-disarmed Timer shall be an explicit expected observation, and cancellation
-shall stop the Timer and remove that Timer's pending private Message deliveries
-without removing unrelated deliveries. Cancellation of a Timer that
-is neither armed nor pending shall return the same expected not-running
-observation as stopping an already disarmed Timer when it has no retained
-dynamic Message claim. Stopping a Timer shall preserve its configured Message
-and retained base claim so the Timer can be armed again; cancellation is the
-terminal operation that releases that retained claim.
+disarmed Timer shall be an explicit expected observation, and stopping with a
+clear-pending request shall remove that Timer's pending private Message
+deliveries without removing unrelated deliveries. Clearing pending deliveries
+shall preserve the configured Message and retained base claim so the Timer can
+be armed again. Destroying a Timer shall stop it, remove its pending private
+Message deliveries, release its retained base claim, and make the Timer
+terminal. Destroying an already destroyed Timer shall return the expected
+not-running observation.
 <<<
 RELATIONS:
 - TYPE: Parent

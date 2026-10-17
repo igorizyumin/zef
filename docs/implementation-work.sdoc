@@ -206,9 +206,9 @@ TITLE: Timer-private messages and mailbox layout
 STATEMENT: >>>
 Each public ``ZMailbox`` stores only its configured Message pointer slots.
 Timers create or embed a private Message and enqueue that same Message for
-each expiration. Cancellation removes matching private Message pointers using
-the bounded mailbox removal operation, so no per-slot timer owner metadata or
-dynamic allocation is required.
+each expiration. Stop-with-clear and destruction remove matching private
+Message pointers using the bounded mailbox removal operation, so no per-slot
+timer owner metadata or dynamic allocation is required.
 <<<
 COMMENT: Code references: include/zef.h; src/zef_mailbox.c; src/zef_timer.c.
 RELATIONS:
@@ -404,11 +404,12 @@ TITLE: Timer-owned messages and base claims
 STATEMENT: >>>
 Payload timer initialization allocates and copies one private dynamic Message
 for the Timer. Expiry retains one claim per queued delivery, while the Timer
-keeps its base claim until terminal cancellation. Stopping or one-shot expiry
-leaves the base claim in place so the Timer can be armed again. Cancellation
-unlinks the Timer, removes matching private Message entries, and releases the
-retained base claim. Topic timers use an embedded zero-payload static Message
-and do not use pool claims.
+keeps its base claim until destruction. Stopping or one-shot expiry leaves the
+base claim in place so the Timer can be armed again. Stop-with-clear unlinks
+the Timer and removes matching private Message entries while preserving the
+base claim. Destruction unlinks the Timer, removes matching private Message
+entries, and releases the retained base claim. Topic timers use an embedded
+zero-payload static Message and do not use pool claims.
 <<<
 COMMENT: Code references: src/zef_timer.c; src/zef_mailbox.c.
 RELATIONS:
@@ -553,7 +554,7 @@ end-to-end path. The traceable test-work executable covers public compilation,
 pool selection, typed access, claims, panic reasons and preserved failure
 state, Mailbox ordering and wraparound, hierarchical Machine transitions,
 Reactor startup and cooperative scheduling, topic publication and
-zero-recipient reclamation, Timer delivery and ownership, cancellation, and
+zero-recipient reclamation, Timer delivery and ownership, stop/clear/destroy, and
 Port callback paths. The CMake test targets run both executables in the
 available host configurations. Configuration-variant, property, and sanitizer
 matrices remain outside the current host test target.

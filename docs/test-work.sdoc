@@ -305,11 +305,11 @@ RELATIONS:
 
 [REQUIREMENT]
 UID: ZEF-TEST-031
-TITLE: Timer-specific cancellation
+TITLE: Timer-specific pending-delivery clearing
 STATEMENT: >>>
 Queue an ordinary delivery and a Timer delivery using the same
-static Message reference, cancel the Timer, and verify only the Timer-owned
-entry is removed.
+static Message reference, stop the Timer with pending-delivery clearing
+enabled, and verify only the Timer-owned entry is removed.
 <<<
 RELATIONS:
 - TYPE: Parent
@@ -348,9 +348,9 @@ Arm two topic Timers for the same tick and verify their queued order matches
 arm order without invoking a handler during Clock advancement. Then initialize
 a payload-based periodic Timer, stop it with a pending delivery, take and
 release that delivery, verify the Timer retains its base claim, and re-arm it
-successfully before terminal cancellation. A second dynamic Timer is cancelled
-with a pending delivery to verify private-message removal, claim cleanup, and
-the ``Z_NOT_RUNNING`` result after cancellation. The same
+successfully before destruction. A second dynamic Timer is destroyed with a
+pending delivery to verify private-message removal, claim cleanup, and the
+``Z_NOT_RUNNING`` result after destruction. The same
 fixture also checks the configured span overflow panic and the double-arm
 lifecycle panic before stopping the valid Timer.
 <<<

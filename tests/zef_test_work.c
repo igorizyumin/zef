@@ -221,7 +221,7 @@ static void test_actor_composition(void)
     CHECK(actor.reactor.context == &context);
     CHECK(z_actor_register(&kernel, &actor, 2u) == 2u);
     CHECK(actor.mailbox.owner == &actor.reactor);
-    z_actor_start(&kernel, &actor);
+    z_actor_start(&actor);
 
     z_message_static_init(&message_storage, 4u, NULL, 0u);
     EXPECT_PANIC(z_mailbox_postpone(&actor.mailbox, &message_storage),
@@ -1125,7 +1125,7 @@ static void test_timer_behavior(void)
     CHECK(z_mailbox_count(&mailbox) == 1u);
     CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
     CHECK(context.handled == 1u);
-    CHECK(z_timer_stop(&one_shot) == Z_NOT_RUNNING);
+    CHECK(z_timer_stop(&one_shot, 0u) == Z_NOT_RUNNING);
 
     z_timer_init_topic(&periodic, &clock, id, 1u);
     z_timer_arm(&periodic, 1u, 2u);
@@ -1137,13 +1137,13 @@ static void test_timer_behavior(void)
     z_clock_tick(&clock);
     CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
     CHECK(context.handled == 3u);
-    CHECK(z_timer_stop(&periodic) == Z_OK);
-    CHECK(z_timer_stop(&periodic) == Z_NOT_RUNNING);
+    CHECK(z_timer_stop(&periodic, 0u) == Z_OK);
+    CHECK(z_timer_stop(&periodic, 0u) == Z_NOT_RUNNING);
     g_port_state = NULL;
 }
 
-/* @relation(ZEF-TEST-031, scope=timer-specific-cancellation) */
-static void test_timer_cancellation(void)
+/* @relation(ZEF-TEST-031, scope=timer-specific-destruction) */
+static void test_timer_destruction(void)
 {
     HostPortState port_state = { 0u, 0u, 0u, 0u };
     ZPort port;
@@ -1177,12 +1177,12 @@ static void test_timer_cancellation(void)
     z_timer_arm(&timer, 1u, 0u);
     z_clock_tick(&clock);
     CHECK(z_mailbox_count(&mailbox) == 2u);
-    CHECK(z_timer_cancel(&timer) == Z_OK);
+    CHECK(z_timer_destroy(&timer) == Z_OK);
     CHECK(z_mailbox_count(&mailbox) == 1u);
     CHECK(z_mailbox_take(&mailbox, &taken) == Z_OK);
     CHECK(taken == &ordinary);
     z_message_release(taken);
-    CHECK(z_timer_cancel(&timer) == Z_NOT_RUNNING);
+    CHECK(z_timer_destroy(&timer) == Z_NOT_RUNNING);
     g_port_state = NULL;
 }
 
@@ -1204,13 +1204,13 @@ static void test_timer_corner_cases(void)
     ZTimer second;
     ZTimer invalid;
     ZTimer dynamic_timer;
-    ZTimer cancelled_timer;
+    ZTimer destroyed_timer;
     ZMsg const *taken = NULL;
     _Alignas(ZEF_POOL_ALIGNMENT) unsigned char storage[64u];
     ZMessagePool pool;
     ZMessagePoolSet set;
     uint32_t dynamic_payload = 123u;
-    uint32_t cancelled_payload = 456u;
+    uint32_t destroyed_payload = 456u;
 
     g_port_state = &port_state;
     port = test_port();
@@ -1229,7 +1229,7 @@ static void test_timer_corner_cases(void)
                  Z_PANIC_OVERFLOW);
     z_timer_arm(&invalid, 1u, 0u);
     EXPECT_PANIC(z_timer_arm(&invalid, 1u, 0u), Z_PANIC_STATE);
-    CHECK(z_timer_stop(&invalid) == Z_OK);
+    CHECK(z_timer_stop(&invalid, 0u) == Z_OK);
 
     z_timer_init_topic(&first, &clock, id, 10u);
     z_timer_init_topic(&second, &clock, id, 11u);
@@ -1249,10 +1249,16 @@ static void test_timer_corner_cases(void)
     z_timer_arm(&dynamic_timer, 1u, 1u);
     z_clock_tick(&clock);
     CHECK(pool.free_count == 0u);
-    CHECK(z_timer_stop(&dynamic_timer) == Z_OK);
+    CHECK(z_timer_stop(&dynamic_timer, 0u) == Z_OK);
     CHECK(z_mailbox_take(&mailbox, &taken) == Z_OK);
     CHECK(taken != NULL);
     z_message_release(taken);
+    CHECK(pool.free_count == 0u);
+    z_timer_arm(&dynamic_timer, 1u, 0u);
+    z_clock_tick(&clock);
+    CHECK(z_mailbox_count(&mailbox) == 1u);
+    CHECK(z_timer_stop(&dynamic_timer, 1u) == Z_OK);
+    CHECK(z_mailbox_count(&mailbox) == 0u);
     CHECK(pool.free_count == 0u);
     z_timer_arm(&dynamic_timer, 1u, 0u);
     z_clock_tick(&clock);
@@ -1260,17 +1266,17 @@ static void test_timer_corner_cases(void)
     CHECK(taken != NULL);
     z_message_release(taken);
     CHECK(pool.free_count == 0u);
-    CHECK(z_timer_cancel(&dynamic_timer) == Z_OK);
+    CHECK(z_timer_destroy(&dynamic_timer) == Z_OK);
     CHECK(pool.free_count == pool.block_count);
 
-    z_timer_init_payload(&cancelled_timer, &clock, id, &set, 13u,
-                         &cancelled_payload, sizeof(cancelled_payload));
-    z_timer_arm(&cancelled_timer, 1u, 0u);
+    z_timer_init_payload(&destroyed_timer, &clock, id, &set, 13u,
+                         &destroyed_payload, sizeof(destroyed_payload));
+    z_timer_arm(&destroyed_timer, 1u, 0u);
     z_clock_tick(&clock);
-    CHECK(z_timer_cancel(&cancelled_timer) == Z_OK);
+    CHECK(z_timer_destroy(&destroyed_timer) == Z_OK);
     CHECK(z_mailbox_count(&mailbox) == 0u);
     CHECK(pool.free_count == pool.block_count);
-    CHECK(z_timer_cancel(&cancelled_timer) == Z_NOT_RUNNING);
+    CHECK(z_timer_destroy(&destroyed_timer) == Z_NOT_RUNNING);
     g_port_state = NULL;
 }
 
@@ -1372,7 +1378,7 @@ int main(void)
     test_shared_stack_priority_gate();
     test_topic_behavior();
     test_timer_behavior();
-    test_timer_cancellation();
+    test_timer_destruction();
     test_timer_corner_cases();
     test_port_behavior();
     return 0;

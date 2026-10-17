@@ -28,8 +28,7 @@ static uint16_t append_u32(char *buffer, uint16_t at, uint16_t capacity,
 /* Worker state                                                               */
 /* -------------------------------------------------------------------------- */
 
-Z_STATE_HANDLER(DemoWorkerActor, worker_handle)
-{
+Z_STATE_HANDLER(worker_handle, DemoWorkerActor)
     if (z_message_topic(message) != ctx->topic) {
         return z_action_unhandled();
     }
@@ -53,7 +52,7 @@ Z_STATE_HANDLER(DemoWorkerActor, worker_handle)
 }
 
 static ZStateNode const g_worker_state = {
-    .handle = worker_handle_zef_adapter
+    .handle = worker_handle
 };
 
 void demo_worker_actor_init(DemoWorkerActor *worker,

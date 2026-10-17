@@ -21,10 +21,10 @@ ZReactorId z_actor_register(ZKernel *kernel, ZActor *actor, ZReactorId id)
     return z_reactor_register(kernel, &actor->reactor, id);
 }
 
-void z_actor_start(ZKernel *kernel, ZActor *actor)
+void z_actor_start(ZActor *actor)
 {
     ZEF_REQUIRE(actor != NULL && actor->reactor.initialized &&
-                    actor->reactor.registered && actor->reactor.kernel == kernel,
+                    actor->reactor.registered && actor->reactor.kernel != NULL,
                 Z_PANIC_LIFECYCLE, actor, 0u);
-    z_reactor_start(kernel, actor->reactor.id);
+    z_reactor_start(actor->reactor.kernel, actor->reactor.id);
 }

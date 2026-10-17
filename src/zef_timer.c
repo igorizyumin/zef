@@ -51,7 +51,7 @@ static void zef_timer_link_tail(ZTimer *timer)
 
 static void zef_timer_maybe_release_base(ZTimer *timer)
 {
-    if (timer->cancelled && timer->base_claim) {
+    if (timer->destroyed && timer->base_claim) {
         timer->base_claim = 0u;
         z_message_release(timer->message);
     }
@@ -115,7 +115,7 @@ void z_timer_arm(ZTimer *timer, ZTick delay, ZTick period)
 {
     zef_timer_validate(timer);
     ZCriticalState state = z_port_critical_enter();
-    ZEF_REQUIRE(!timer->cancelled, Z_PANIC_STATE, timer, 0u);
+    ZEF_REQUIRE(!timer->destroyed, Z_PANIC_STATE, timer, 0u);
     ZEF_REQUIRE(!timer->armed, Z_PANIC_STATE, timer, 0u);
     ZEF_REQUIRE(delay <= ZEF_MAX_TIMER_SPAN && period <= ZEF_MAX_TIMER_SPAN,
                 Z_PANIC_OVERFLOW, timer,
@@ -127,43 +127,41 @@ void z_timer_arm(ZTimer *timer, ZTick delay, ZTick period)
     z_port_critical_leave(state);
 }
 
-ZResult z_timer_stop(ZTimer *timer)
+ZResult z_timer_stop(ZTimer *timer, ZBool clear_pending)
 {
     zef_timer_validate(timer);
     ZCriticalState state = z_port_critical_enter();
-    if (!timer->armed) {
-        z_port_critical_leave(state);
+    ZEF_REQUIRE(!timer->destroyed, Z_PANIC_LIFECYCLE, timer, 0u);
+    ZBool was_armed = timer->armed;
+    if (was_armed) {
+        zef_timer_unlink(timer);
+        timer->armed = 0u;
+    }
+    uint16_t removed = 0u;
+    if (clear_pending) {
+        removed = zef_timer_remove_pending(timer);
+    }
+    z_port_critical_leave(state);
+    if (!was_armed && removed == 0u) {
         return Z_NOT_RUNNING;
     }
-    zef_timer_unlink(timer);
-    timer->armed = 0u;
-    z_port_critical_leave(state);
+
     return Z_OK;
 }
 
-ZResult z_timer_cancel(ZTimer *timer)
+ZResult z_timer_destroy(ZTimer *timer)
 {
     zef_timer_validate(timer);
     ZCriticalState state = z_port_critical_enter();
-    if (timer->cancelled) {
+    if (timer->destroyed) {
         z_port_critical_leave(state);
         return Z_NOT_RUNNING;
-    }
-    if (!timer->armed && !timer->base_claim) {
-        uint16_t removed = zef_timer_remove_pending(timer);
-        if (removed == 0u) {
-            z_port_critical_leave(state);
-            return Z_NOT_RUNNING;
-        }
-        timer->cancelled = 1u;
-        z_port_critical_leave(state);
-        return Z_OK;
     }
     if (timer->armed) {
         zef_timer_unlink(timer);
         timer->armed = 0u;
     }
-    timer->cancelled = 1u;
+    timer->destroyed = 1u;
     zef_timer_remove_pending(timer);
     zef_timer_maybe_release_base(timer);
     z_port_critical_leave(state);

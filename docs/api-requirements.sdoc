@@ -316,10 +316,14 @@ unsigned modular tick arithmetic. A zero delay expires on the next tick, and a
 Timer armed during processing of tick T is not eligible until a later tick.
 Timers due on the same tick are posted in arm order; delays and periods are
 limited to the configured less-than-half-range maximum.
-Stopping unlinks it immediately and returns ``Z_NOT_RUNNING`` when it was
-already stopped. Cancellation stops the Timer and removes its pending private
-Message deliveries. Because each Timer owns a distinct Message, cancellation
-cannot remove an unrelated delivery.
+Stopping unlinks the Timer immediately and returns ``Z_NOT_RUNNING`` when it
+was already stopped and no pending delivery was requested for removal. Its
+``clear_pending`` argument removes only that Timer's queued private Message
+deliveries when nonzero, while preserving the Timer's base claim so the Timer
+can be armed again. Because each Timer owns a distinct Message, clearing
+pending deliveries cannot remove an unrelated delivery. Destroying a Timer
+disarms it, clears all pending private deliveries, releases its base claim, and
+is terminal; the Timer must be initialized again before reuse.
 <<<
 
 [TEXT]
@@ -466,6 +470,14 @@ conditions use the panic boundary. Read access to a dynamic Message requires
 the caller to hold a live reference; an absent or stale dynamic reference is
 an ownership violation. Read access to a static Message requires only that the
 caller-owned Message and payload remain alive and immutable.
+
+``Z_MSG_PAYLOAD_MUT`` is a producer-side checked re-access operation. It is
+intended for a helper that receives a generic mutable ``ZMsg *`` while the
+caller still owns the dynamic Message's construction claim. It is not a
+state-handler operation: handlers receive borrowed ``ZMsg const *`` values and
+must use the read-only ``Z_MSG_PAYLOAD`` path. Mutable payload access is invalid
+for static Messages and after a consuming post or publication transfers the
+construction claim.
 
 Applications with one message-pool set may initialize the application-wide
 factory once with ``z_message_factory_init`` and use ``Z_MSG_NEW`` without
@@ -813,7 +825,7 @@ introduce a separate scheduler entity, allocation policy, or stop operation.
    ZReactorId z_actor_register(ZKernel *kernel,
                                ZActor *actor,
                                ZReactorId id);
-   void z_actor_start(ZKernel *kernel, ZActor *actor);
+   void z_actor_start(ZActor *actor);
    #define Z_MSG_POST(actor_, msg_) \
        do { \
            ZMsg *zef_post_message_ = (ZMsg *)(msg_); \
@@ -939,8 +951,8 @@ Message, delay, and period. The Clock and Timer surface is:
                              void const *payload,
                              size_t payload_size);
    void z_timer_arm(ZTimer *timer, ZTick delay, ZTick period);
-   ZResult z_timer_stop(ZTimer *timer);
-   ZResult z_timer_cancel(ZTimer *timer);
+   ZResult z_timer_stop(ZTimer *timer, ZBool clear_pending);
+   ZResult z_timer_destroy(ZTimer *timer);
    void z_clock_tick(ZClock *clock);
 
 ``z_timer_init_payload`` copies the supplied payload into one Timer-owned
@@ -955,11 +967,11 @@ posts a Message and does not invoke application handlers from tick context.
 Timers expiring on the same tick are posted in arm order. Tick arithmetic is
 unsigned and modular; zero delay expires on the next tick, and delays and
 periods are limited to the configured less-than-half-range maximum.
-``z_timer_cancel`` stops the Timer and removes its pending private Message
-deliveries; it releases a retained dynamic base claim and returns
-``Z_NOT_RUNNING`` when the Timer is neither armed nor pending and has no
-retained base claim. A canceled Timer must be initialized again before it can
-be armed.
+``z_timer_stop(timer, 1)`` stops the Timer and removes its pending private
+Message deliveries without removing unrelated Mailbox entries, while keeping
+the Timer reusable. ``z_timer_destroy`` performs the same removal but also
+releases the Timer's retained dynamic Message claim and makes the Timer
+terminal. It returns ``Z_NOT_RUNNING`` when the Timer was already destroyed.
 <<<
 RELATIONS:
 - TYPE: Parent

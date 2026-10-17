@@ -53,9 +53,9 @@ void demo_app_init(DemoApp *app, ZPort const *port)
                            DEMO_SERIAL_REACTOR_ID);
 
     for (uint16_t index = 0u; index < DEMO_WORKER_COUNT; ++index) {
-        z_actor_start(&app->kernel, &app->workers[index].actor);
+        z_actor_start(&app->workers[index].actor);
     }
-    z_actor_start(&app->kernel, &app->serial.actor);
+    z_actor_start(&app->serial.actor);
 
     for (uint16_t index = 0u; index < DEMO_WORKER_COUNT; ++index) {
         DemoWorkerConfig const *config = &g_worker_config[index];

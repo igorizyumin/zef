@@ -55,8 +55,7 @@ static ZBool serial_start_deferred_dma(DemoSerialActor *serial)
 /* Idle state                                                                 */
 /* -------------------------------------------------------------------------- */
 
-Z_STATE_HANDLER(DemoSerialActor, serial_idle_handle)
-{
+Z_STATE_HANDLER(serial_idle_handle, DemoSerialActor)
     switch (z_message_topic(message)) {
     case TOPIC_SERIAL_LINE:
         /* Keep the borrowed dispatch reference until busy_enter can retain it
@@ -71,23 +70,21 @@ Z_STATE_HANDLER(DemoSerialActor, serial_idle_handle)
 
 static ZStateNode const g_serial_idle = {
     .parent = &g_serial_root,
-    .handle = serial_idle_handle_zef_adapter
+    .handle = serial_idle_handle
 };
 
 /* -------------------------------------------------------------------------- */
 /* Busy state                                                                 */
 /* -------------------------------------------------------------------------- */
 
-Z_STATE_HOOK(DemoSerialActor, serial_busy_enter)
-{
+Z_STATE_HOOK(serial_busy_enter, DemoSerialActor)
     if (ctx->active_message == NULL) {
         ZEF_PANIC(Z_PANIC_STATE, ctx, 0u);
     }
     serial_start_dma(ctx, ctx->active_message);
 }
 
-Z_STATE_HANDLER(DemoSerialActor, serial_busy_handle)
-{
+Z_STATE_HANDLER(serial_busy_handle, DemoSerialActor)
     switch (z_message_topic(message)) {
     case TOPIC_SERIAL_LINE:
         /* Add a deferred-mailbox claim while the dispatch still owns its
@@ -109,8 +106,8 @@ Z_STATE_HANDLER(DemoSerialActor, serial_busy_handle)
 
 static ZStateNode const g_serial_busy = {
     .parent = &g_serial_root,
-    .handle = serial_busy_handle_zef_adapter,
-    .enter = serial_busy_enter_zef_adapter
+    .handle = serial_busy_handle,
+    .enter = serial_busy_enter
 };
 
 /* -------------------------------------------------------------------------- */

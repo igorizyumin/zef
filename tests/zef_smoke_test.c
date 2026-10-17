@@ -84,17 +84,17 @@ static void test_end_to_end(void)
     CHECK(z_kernel_run_one(&kernel) == Z_WORK_DONE);
     CHECK(context.handled == 2u);
 
-    /* Cancellation removes the timer's private message, not the ordinary entry. */
+    /* Clearing pending delivery removes the timer message, not the ordinary entry. */
     ZMsg const *deferred_slots[1];
     ZMailbox deferred;
     z_mailbox_init(&deferred, deferred_slots, 1u);
     z_mailbox_postpone(&deferred, &static_message);
-    ZTimer cancellable;
-    z_timer_init_topic(&cancellable, &clock, id, 2u);
-    z_timer_arm(&cancellable, 1u, 0u);
+    ZTimer clear_pending_timer;
+    z_timer_init_topic(&clear_pending_timer, &clock, id, 2u);
+    z_timer_arm(&clear_pending_timer, 1u, 0u);
     z_clock_tick(&clock);
     CHECK(z_mailbox_count(&mailbox) == 1u);
-    CHECK(z_timer_cancel(&cancellable) == Z_OK);
+    CHECK(z_timer_stop(&clear_pending_timer, 1u) == Z_OK);
     CHECK(z_mailbox_count(&mailbox) == 0u);
     CHECK(z_mailbox_take(&deferred, &taken) == Z_OK);
     CHECK(taken == &static_message);
