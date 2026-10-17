@@ -33,15 +33,21 @@ Z_STATE_HANDLER(worker_handle, DemoWorkerActor)
         return z_action_unhandled();
     }
 
-    TimerEvent const *event = Z_MSG_PAYLOAD(message, TimerEvent);
+    uint32_t sequence = ctx->handled + 1u;
+    uint32_t interval_ms = ctx->period_ms;
+    if (z_message_payload_size(message) == sizeof(TimerEvent)) {
+        TimerEvent const *event = Z_MSG_PAYLOAD(message, TimerEvent);
+        sequence = event->sequence;
+        interval_ms = event->interval_ms;
+    }
     ZMsg *line_message = NULL;
     SerialLine *line = Z_MSG_NEW(TOPIC_SERIAL_LINE, SerialLine, &line_message);
     uint16_t at = 0u;
     at = append_text(line->text, at, sizeof(line->text), ctx->name);
     at = append_text(line->text, at, sizeof(line->text), " event seq=");
-    at = append_u32(line->text, at, sizeof(line->text), event->sequence);
+    at = append_u32(line->text, at, sizeof(line->text), sequence);
     at = append_text(line->text, at, sizeof(line->text), " period=");
-    at = append_u32(line->text, at, sizeof(line->text), event->interval_ms);
+    at = append_u32(line->text, at, sizeof(line->text), interval_ms);
     at = append_text(line->text, at, sizeof(line->text), "ms prio=");
     at = append_u32(line->text, at, sizeof(line->text), ctx->priority);
     at = append_text(line->text, at, sizeof(line->text), "\r\n");
@@ -59,7 +65,8 @@ void demo_worker_actor_init(DemoWorkerActor *worker,
                             DemoSerialActor *serial,
                             char const *name,
                             ZTopic topic,
-                            ZReactorId priority)
+                            ZReactorId priority,
+                            uint32_t period_ms)
 {
     ZEF_REQUIRE(worker != NULL && serial != NULL && name != NULL,
                 Z_PANIC_INVALID_ARGUMENT, worker, 0u);
@@ -67,6 +74,7 @@ void demo_worker_actor_init(DemoWorkerActor *worker,
     worker->name = name;
     worker->topic = topic;
     worker->priority = priority;
+    worker->period_ms = period_ms;
     worker->handled = 0u;
     z_actor_init(&worker->actor, &g_worker_state, worker,
                  worker->mailbox_slots, 8u);

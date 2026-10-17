@@ -40,5 +40,5 @@ void TIM6_DAC_IRQHandler(void)
 
 void TIM7_IRQHandler(void)
 {
-    demo_timer_source_irq(&g_app.timers[2]);
+    demo_app_clock_tick_isr(&g_app);
 }

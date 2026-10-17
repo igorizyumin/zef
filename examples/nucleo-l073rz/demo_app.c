@@ -25,7 +25,8 @@ static DemoWorkerConfig const g_worker_config[DEMO_WORKER_COUNT] = {
     { .name = "MEDIUM", .topic = TOPIC_MEDIUM_TICK, .timer = NUCLEO_TIMER_6,
       .period_ms = 293u, .reactor_id = 2u },
     { .name = "SLOW", .topic = TOPIC_SLOW_TICK, .timer = NUCLEO_TIMER_7,
-      .period_ms = 887u, .reactor_id = 3u }
+      .period_ms = DEMO_SLOW_PERIOD_TICKS * DEMO_CLOCK_TICK_MS,
+      .reactor_id = 3u }
 };
 
 void demo_app_init(DemoApp *app, ZPort const *port)
@@ -45,19 +46,24 @@ void demo_app_init(DemoApp *app, ZPort const *port)
         DemoWorkerConfig const *config = &g_worker_config[index];
         demo_worker_actor_init(&app->workers[index], &app->serial,
                                config->name, config->topic,
-                               config->reactor_id);
+                               config->reactor_id, config->period_ms);
         (void)z_actor_register(&app->kernel, &app->workers[index].actor,
                                config->reactor_id);
     }
     (void)z_actor_register(&app->kernel, &app->serial.actor,
                            DEMO_SERIAL_REACTOR_ID);
 
+    z_clock_init(&app->clock, &app->kernel);
+    z_timer_init_topic(&app->slow_timer, &app->clock,
+                       g_worker_config[DEMO_SLOW_WORKER_INDEX].reactor_id,
+                       TOPIC_SLOW_TICK);
+
     for (uint16_t index = 0u; index < DEMO_WORKER_COUNT; ++index) {
         z_actor_start(&app->workers[index].actor);
     }
     z_actor_start(&app->serial.actor);
 
-    for (uint16_t index = 0u; index < DEMO_WORKER_COUNT; ++index) {
+    for (uint16_t index = 0u; index < DEMO_DIRECT_TIMER_COUNT; ++index) {
         DemoWorkerConfig const *config = &g_worker_config[index];
         demo_timer_source_init(&app->timers[index], config->timer,
                                config->period_ms, config->topic,
@@ -77,5 +83,16 @@ void demo_app_post_banner(DemoApp *app)
 
 void demo_app_start_timers(DemoApp *app)
 {
-    demo_timer_sources_start(app->timers, DEMO_WORKER_COUNT);
+    z_timer_arm(&app->slow_timer, DEMO_SLOW_PERIOD_TICKS,
+                DEMO_SLOW_PERIOD_TICKS);
+    demo_timer_sources_start(app->timers, DEMO_DIRECT_TIMER_COUNT);
+    nucleo_timer_start(NUCLEO_TIMER_7, DEMO_CLOCK_TICK_MS);
+}
+
+void demo_app_clock_tick_isr(DemoApp *app)
+{
+    if (nucleo_timer_irq_status(NUCLEO_TIMER_7) != 0u) {
+        nucleo_timer_irq_clear(NUCLEO_TIMER_7);
+        z_clock_tick(&app->clock);
+    }
 }

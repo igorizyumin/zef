@@ -11,6 +11,7 @@ typedef struct {
     char const *name;
     ZTopic topic;
     ZReactorId priority;
+    uint32_t period_ms;
     uint32_t handled;
 } DemoWorkerActor;
 
@@ -18,6 +19,7 @@ void demo_worker_actor_init(DemoWorkerActor *worker,
                             DemoSerialActor *serial,
                             char const *name,
                             ZTopic topic,
-                            ZReactorId priority);
+                            ZReactorId priority,
+                            uint32_t period_ms);
 
 #endif

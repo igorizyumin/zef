@@ -6,9 +6,10 @@ is routed to the ST-LINK virtual COM port.
 
 The application exercises the framework in one repeatable loop:
 
-* TIM2, TIM6, and TIM7 interrupt at 137 ms, 293 ms, and 887 ms respectively.
-* Each ISR builds a typed fixed-pool `TimerEvent` and posts it to a different
-  worker Reactor.
+* TIM2 and TIM6 interrupt at 137 ms and 293 ms, and post typed fixed-pool
+  `TimerEvent` messages to the FAST and MEDIUM worker Reactors.
+* TIM7 provides a fixed 10 ms time base. A periodic `ZTimer` advances on that
+  clock and posts the SLOW worker's event every 100 ticks (1 second).
 * The workers have strict priorities 1, 2, and 3. Each worker consumes its
   event and posts a typed `SerialLine` to the priority-7 serial Reactor.
 * The serial Reactor starts a zero-copy DMA transfer directly from the
@@ -22,7 +23,7 @@ default is the shared-stack preemptive port.
 
 The example is organized by responsibility: `demo_worker_actor.[ch]` contains
 the worker state machine, `demo_serial_actor.[ch]` contains the DMA-backed
-serial state machine, `demo_timer_source.[ch]` contains timer ISR glue,
+serial state machine, `demo_timer_source.[ch]` contains direct timer ISR glue,
 `nucleo_l073rz_hw.[ch]` contains board register definitions and hardware
 operations, and `demo_app.[ch]` contains the composition and startup wiring.
 `main.c` only performs board startup and runs the Kernel.
@@ -49,5 +50,5 @@ ZEF Nucleo-L073RZ demo ready
 FAST event seq=1 period=137ms prio=1
 MEDIUM event seq=1 period=293ms prio=2
 FAST event seq=2 period=137ms prio=1
-SLOW event seq=1 period=887ms prio=3
+SLOW event seq=1 period=1000ms prio=3
 ```
